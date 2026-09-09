@@ -72,10 +72,20 @@ export function validateAbstract(
   // or a URL already in Storage — so the form reduces it to these two flags
   // before calling. Keeping the check here rather than in the DOM is what makes
   // it testable, and it mirrors validAbstract() in firestore.rules.
+  //
+  // Only required while the submission is still in the running for a talk —
+  // a missing talkConsidered counts as willing, same as everywhere else this
+  // flag is read (see abstract-utils.mjs's matchesTalk). Someone who has opted
+  // out stays poster-only and needs neither.
+  const requiresFigure = input?.talkConsidered !== false;
   const caption = String(input?.figureCaption ?? "").trim();
-  if (input?.hasFigure !== true) errors.push("A figure is required.");
-  if (!caption) errors.push("The figure needs a caption.");
-  else if (caption.length > LIMITS.figureCaption) {
+  if (requiresFigure && input?.hasFigure !== true) {
+    errors.push("A figure is required to be considered for a talk.");
+  }
+  if (requiresFigure && !caption) {
+    errors.push("The figure needs a caption to be considered for a talk.");
+  }
+  if (caption.length > LIMITS.figureCaption) {
     errors.push(`The figure caption must be ${LIMITS.figureCaption} characters or fewer.`);
   }
 

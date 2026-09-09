@@ -46,8 +46,9 @@ const TEMPLATE = `
     <textarea id="abs-body" maxlength="2500" required></textarea>
 
     <label for="abs-figure">Figure
-      <span class="hint">Required. PNG, JPEG, or WebP, up to 5 MB. Large images
-        are shrunk automatically before upload.</span></label>
+      <span class="hint"><strong>Required if you want this abstract to be considered
+        for a talk (see the checkbox below).</strong> PNG, JPEG, or WebP, up to 5 MB.
+        Large images are shrunk automatically before upload.</span></label>
     <input id="abs-figure" type="file" accept="image/png,image/jpeg,image/webp">
     <p id="abs-figure-preview" hidden>
       <img id="abs-figure-img" alt="Figure preview" style="max-width:16rem;height:auto">
@@ -55,11 +56,11 @@ const TEMPLATE = `
     </p>
 
     <label for="abs-figure-caption">Figure caption
-      <span class="hint">Required. Plain text, no formatting.
-        <span id="abs-caption-count"></span></span>
+      <span class="hint"><strong>Required if you want this abstract to be considered
+        for a talk.</strong> Plain text, no formatting. <span id="abs-caption-count"></span></span>
     </label>
     <textarea id="abs-figure-caption" maxlength="${LIMITS.figureCaption}" rows="2"
-      style="min-height:4rem" required></textarea>
+      style="min-height:4rem"></textarea>
 
     <div class="checkline">
       <input id="abs-no-talk" type="checkbox">
@@ -453,8 +454,13 @@ export async function mountAbstractForm(
   // they are the committee's to assign, and showing them would promise a
   // decision that has not been taken.
   const refreshPreview = () => {
+    const draft = collect();
+    // Mirrors validateAbstract(): the caption is only required while the
+    // abstract is still in the running for a talk, so aria-required tracks
+    // the checkbox rather than staying permanently on.
+    captionEl.required = draft.talkConsidered;
     $("#abs-preview").replaceChildren(
-      abstractCard({ ...collect(), figureUrl: figureSrc }));
+      abstractCard({ ...draft, figureUrl: figureSrc }));
     $("#abs-count").textContent = `${bodyEl.value.length} / ${LIMITS.body}`;
     $("#abs-caption-count").textContent =
       `${captionEl.value.length} / ${LIMITS.figureCaption}`;
@@ -491,9 +497,13 @@ export async function mountAbstractForm(
     figureCleared = Boolean(figurePath);
     showFigure(null);
     refreshPreview();
-    // Removing it is allowed; saving without one is not. Say so now rather than
-    // letting them fill the rest of the form and hit the error at the end.
-    say("Figure removed. Choose another before saving — a figure is required.", "warn");
+    // Removing it is allowed; saving without one while still in the running
+    // for a talk is not. Say so now rather than letting them fill the rest of
+    // the form and hit the error at the end.
+    say(noTalkEl.checked
+      ? "Figure removed."
+      : "Figure removed. Choose another before saving, or tick “I do not want "
+        + "this poster to be considered for a talk” below.", "warn");
   });
 
   // Taken once the fields are populated, so "dirty" means changed by the person

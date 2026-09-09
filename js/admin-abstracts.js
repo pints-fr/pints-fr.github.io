@@ -467,12 +467,15 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
         figure.append(caption);
       }
     } else {
-      // Required since 2026, so this can only be a record that predates the
-      // rule or one an organizer wrote by hand. Say so rather than showing a
-      // silently empty space.
+      // Required since 2026 unless the submitter opted out of a talk, so a
+      // missing figure is either that opt-out or a record that predates the
+      // rule (or one an organizer wrote by hand). Say so rather than showing
+      // a silently empty space.
       const missing = document.createElement("p");
       missing.className = "muted";
-      missing.textContent = "No figure — this abstract predates the figure requirement.";
+      missing.textContent = abstract.talkConsidered === false
+        ? "No figure — not required, since the submitter opted out of a talk."
+        : "No figure — this abstract predates the figure requirement.";
       figure.append(missing);
     }
 
@@ -537,6 +540,13 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     const accept = guarded(
       isPublished ? "Update published copy" : "Accept & publish", "",
       async () => {
+        if (typeSelect.value === "talk" && !(abstract.figureUrl && abstract.figureCaption)) {
+          const err = new Error(
+            "This abstract has no figure and caption, which talks require. "
+            + "Add them from Edit, or publish it as a poster instead.");
+          err.userFacing = true;
+          throw err;
+        }
         await recordDecision(abstract.id, adminUid);
         await publishAbstract(abstract.id, abstract, {
           type: typeSelect.value,

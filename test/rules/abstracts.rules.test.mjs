@@ -147,6 +147,16 @@ test("a figure and its caption are required", async () => {
   await assertFails(setDoc(doc(fs, "abstracts", "alice"), noCaption));
 });
 
+// Once a submitter opts out of a talk, the abstract stays poster-only and
+// neither field has anywhere to be used.
+test("figure and caption become optional once the submitter opts out of a talk", async () => {
+  await seedConfig(env);
+  const fs = asUser(env, "alice");
+  const { figureUrl, figurePath, figureCaption, ...noFigureAtAll } =
+    abstract({ talkConsidered: false });
+  await assertSucceeds(setDoc(doc(fs, "abstracts", "alice"), noFigureAtAll));
+});
+
 test("an owner can edit their abstract while it is still submitted", async () => {
   await seedConfig(env);
   await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));

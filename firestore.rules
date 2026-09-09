@@ -44,25 +44,27 @@ service cloud.firestore {
       return cfg.submissionsOpen == true && request.time < cfg.submissionDeadline;
     }
 
-    // The figure and its caption are REQUIRED: a poster abstract without one is
-    // not usable in the booklet, and a figure nobody captioned is not usable
-    // either. Organizers writing through `allow write: if isAdmin()` skip this,
-    // so a record that predates the rule can still be repaired.
+    // The figure and its caption are REQUIRED only while the submission is
+    // still in the running for a talk (talkConsidered != false) — a poster
+    // that has opted out needs neither. Organizers writing through
+    // `allow write: if isAdmin()` skip this, so a record that predates the
+    // rule can still be repaired.
     function validAbstract(data, uid) {
       return data.keys().hasOnly(['ownerUid', 'edition', 'title', 'affiliations', 'authors',
                                   'body', 'topic', 'talkConsidered', 'figureUrl', 'figurePath',
                                   'figureCaption', 'status', 'createdAt', 'updatedAt'])
         && data.keys().hasAll(['ownerUid', 'edition', 'title', 'affiliations', 'authors',
-                               'body', 'topic', 'talkConsidered', 'figureUrl',
-                               'figureCaption', 'status'])
+                               'body', 'topic', 'talkConsidered', 'status'])
         && data.ownerUid == uid
         && data.edition is string
         && str(data.title, 200)
         && str(data.body, 2500)
         && data.topic in ['cognitive', 'systems', 'computational']
         && data.talkConsidered is bool
-        && str(data.figureUrl, 500)
-        && str(data.figureCaption, 600)
+        && (data.talkConsidered == false || str(data.figureUrl, 500))
+        && (data.talkConsidered == false || str(data.figureCaption, 600))
+        && optStr(data, 'figureUrl', 500)
+        && optStr(data, 'figureCaption', 600)
         && (!('figurePath' in data) || data.figurePath == null || str(data.figurePath, 300))
         && data.authors is list && data.authors.size() > 0 && data.authors.size() <= 20
         && data.affiliations is list && data.affiliations.size() <= 10;

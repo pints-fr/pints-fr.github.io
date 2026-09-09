@@ -95,9 +95,16 @@ test("a topic is required and must be one of the three", () => {
   }
 });
 
-test("the talk opt-out is not a validation concern either way", () => {
-  assert.ok(validateAbstract(good({ talkConsidered: false }), openNow).valid);
-  assert.ok(validateAbstract(good({ talkConsidered: undefined }), openNow).valid);
+test("figure and caption are required only while still considered for a talk", () => {
+  const optedOut = { talkConsidered: false, hasFigure: false, figureCaption: "" };
+  assert.ok(validateAbstract(good(optedOut), openNow).valid);
+
+  // Missing talkConsidered counts as willing, same as everywhere else this
+  // flag is read (see abstract-utils.mjs's matchesTalk), so it still needs one.
+  const stillConsidered = validateAbstract(
+    good({ talkConsidered: undefined, hasFigure: false, figureCaption: "" }), openNow);
+  assert.equal(stillConsidered.valid, false);
+  assert.ok(stillConsidered.errors.includes("A figure is required to be considered for a talk."));
 });
 
 test("submissions closed and passed deadlines are rejected", () => {
@@ -127,11 +134,11 @@ test("validateAbstract tolerates entirely missing input", () => {
 test("a figure is required, and so is its caption", () => {
   const noFigure = validateAbstract(good({ hasFigure: false }), openNow);
   assert.equal(noFigure.valid, false);
-  assert.ok(noFigure.errors.includes("A figure is required."));
+  assert.ok(noFigure.errors.includes("A figure is required to be considered for a talk."));
 
   const noCaption = validateAbstract(good({ figureCaption: "   " }), openNow);
   assert.equal(noCaption.valid, false);
-  assert.ok(noCaption.errors.includes("The figure needs a caption."));
+  assert.ok(noCaption.errors.includes("The figure needs a caption to be considered for a talk."));
 
   // Missing entirely, not merely blank: an older draft has neither field.
   const neither = validateAbstract(
