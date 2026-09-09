@@ -8,3 +8,4 @@ ui-debug.log
 .claude/
 functions/node_modules/
 __pycache__/
+.codegraph
