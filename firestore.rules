@@ -63,7 +63,9 @@ service cloud.firestore {
         && data.talkConsidered is bool
         && (data.talkConsidered == false || str(data.figureUrl, 500))
         && (data.talkConsidered == false || str(data.figureCaption, 600))
-        && optStr(data, 'figureUrl', 500)
+        // null, not just absent: saveAbstract() writes `figureUrl: null` when
+        // there is no figure, the same way it writes figurePath.
+        && (!('figureUrl' in data) || data.figureUrl == null || str(data.figureUrl, 500))
         && optStr(data, 'figureCaption', 600)
         && (!('figurePath' in data) || data.figurePath == null || str(data.figurePath, 300))
         && data.authors is list && data.authors.size() > 0 && data.authors.size() <= 20

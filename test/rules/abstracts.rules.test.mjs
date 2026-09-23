@@ -157,6 +157,24 @@ test("figure and caption become optional once the submitter opts out of a talk",
   await assertSucceeds(setDoc(doc(fs, "abstracts", "alice"), noFigureAtAll));
 });
 
+// What js/db.js saveAbstract() actually writes for a figure-less abstract: the
+// fields are present and null/empty, not absent.
+test("an opted-out abstract saved with a null figure is accepted", async () => {
+  await seedConfig(env);
+  const fs = asUser(env, "alice");
+  await assertSucceeds(setDoc(doc(fs, "abstracts", "alice"), abstract({
+    talkConsidered: false, figureUrl: null, figurePath: null, figureCaption: "",
+  })));
+});
+
+test("a null figure is still refused while the abstract is considered for a talk", async () => {
+  await seedConfig(env);
+  const fs = asUser(env, "alice");
+  await assertFails(setDoc(doc(fs, "abstracts", "alice"), abstract({
+    figureUrl: null, figurePath: null,
+  })));
+});
+
 test("an owner can edit their abstract while it is still submitted", async () => {
   await seedConfig(env);
   await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
