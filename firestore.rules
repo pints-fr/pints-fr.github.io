@@ -44,6 +44,23 @@ service cloud.firestore {
       return cfg.submissionsOpen == true && request.time < cfg.submissionDeadline;
     }
 
+    // Whether new people may register, from config/site.registrationOpen. Unlike
+    // submissionWindowOpen() this fails OPEN: a missing document or a missing
+    // field means open, because the switch was added after the site went live
+    // and a config written before it must not silently close registration.
+    // js/registration-utils.mjs isRegistrationOpen() reads it the same way.
+    //
+    // What it cannot do is stop Firebase Auth from creating an account: the
+    // client calls createUserWithEmailAndPassword, which no Firestore rule sees.
+    // Somebody going around register.html still ends up with a bare login that
+    // can have no profile and no public listing (see users/ and
+    // participants_public/ below). Stopping the Auth account itself would take
+    // an Identity Platform blocking function.
+    function registrationOpen() {
+      let path = /databases/$(database)/documents/config/site;
+      return !exists(path) || get(path).data.get('registrationOpen', true) != false;
+    }
+
     // The figure and its caption are REQUIRED only while the submission is
     // still in the running for a talk (talkConsidered != false) — a poster
     // that has opted out needs neither. Organizers writing through
@@ -138,10 +155,15 @@ service cloud.firestore {
     }
 
     // Private participant profile. Never public — see participants_public.
+    //
+    // Creating one is what registering IS, so it is the step closing
+    // registration refuses. Updating is not: people already registered keep
+    // editing their name and affiliation after the switch is flipped.
     match /users/{uid} {
       allow get: if isOwner(uid) || isAdmin();
       allow list: if isAdmin();
       allow create: if isOwner(uid)
+        && registrationOpen()
         && validProfile(request.resource.data)
         && request.resource.data.email == request.auth.token.email;
       allow update: if isOwner(uid)
@@ -160,13 +182,22 @@ service cloud.firestore {
     // the owner — being an organizer is permission to fix a typo, not permission
     // to put arbitrary data in a public document.
     //
-    // Deliberately no get() on users/{uid}. A get() would read pre-batch state
-    // and so break the single writeBatch that saves the profile and publishes
-    // the name together — and it buys no confidentiality, because a user can
-    // only ever publish their own name.
+    // Deliberately no get() on users/{uid} for the field checks. A get() would
+    // read pre-batch state and so break the single writeBatch that saves the
+    // profile and publishes the name together — and it buys no confidentiality,
+    // because a user can only ever publish their own name.
+    //
+    // While registration is closed, a listing needs a profile to stand on. That
+    // check uses existsAfter(), which sees the batch's own writes, so the batch
+    // above still works. It is what lets somebody who registered before the
+    // switch was flipped, and confirms their address after, still reach the
+    // list (account.html publishes them on the next visit), while a bare Auth
+    // account made around register.html cannot.
     match /participants_public/{uid} {
       allow read: if true;
       allow create, update: if (isOwner(uid) || isAdmin())
+        && (isAdmin() || registrationOpen()
+            || existsAfter(/databases/$(database)/documents/users/$(uid)))
         && request.resource.data.keys().hasOnly(['displayName', 'affiliation',
                                                  'edition', 'updatedAt'])
         && str(request.resource.data.displayName, 80)

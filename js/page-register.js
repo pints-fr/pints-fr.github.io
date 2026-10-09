@@ -1,9 +1,10 @@
 import { mountLayout, setAuthLink } from "./layout.js";
 import { warnIfUnconfigured } from "./firebase.js";
 import { friendlyAuthError, onUser, signUp } from "./auth.js";
-import { saveProfile } from "./db.js";
+import { getSiteConfig, saveProfile } from "./db.js";
 import { destinationAfterAuth, withNext } from "./redirect-utils.mjs";
 import { LIMITS } from "./config.mjs";
+import { isRegistrationOpen } from "./registration-utils.mjs";
 
 mountLayout();
 
@@ -84,6 +85,37 @@ if (warnIfUnconfigured(msg)) {
     form.hidden = true;
     finish({ verificationSent, profileSaved });
   });
+
+  // Checked after the form is wired, so a slow read never delays a registration
+  // that is allowed. A failed read fails OPEN: firestore.rules refuses the
+  // profile write when registration is closed, so this page is a courtesy, not
+  // the gate.
+  const config = await getSiteConfig().catch((err) => {
+    console.error("[pints] getSiteConfig", err);
+    return null;
+  });
+  if (!isRegistrationOpen(config)) showClosed();
+}
+
+/** Registration has been closed by the organizers: say so, and point onwards. */
+function showClosed() {
+  form.hidden = true;
+  document.getElementById("intro").hidden = true;
+
+  const signIn = document.createElement("a");
+  signIn.href = withNext("login.html", next);
+  signIn.textContent = "Sign in";
+  const contact = document.createElement("a");
+  contact.href = "contact.html";
+  contact.textContent = "contact the organizers";
+
+  msg.className = "msg warn";
+  msg.replaceChildren(
+    document.createTextNode("Registration for PINTS is closed. Already registered? "),
+    signIn,
+    document.createTextNode(". Need help? Please "),
+    contact,
+    document.createTextNode("."));
 }
 
 /** Say what actually happened, and give one link onwards. */

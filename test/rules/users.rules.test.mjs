@@ -126,3 +126,34 @@ test("an admin can read every profile, which an ordinary participant cannot", as
   await assertSucceeds(getDoc(doc(asUser(env, "olivia"), "users", "alice")));
   await assertFails(getDoc(doc(asUser(env, "mallory"), "users", "alice")));
 });
+
+// Closing registration refuses new profiles and nothing else: people already
+// registered keep editing theirs, and organizers can still add one by hand.
+const closeRegistration = () =>
+  seed(env, (fs) => setDoc(doc(fs, "config", "site"), { registrationOpen: false }));
+
+test("nobody new can create a profile while registration is closed", async () => {
+  await closeRegistration();
+  const fs = asUser(env, "alice", { email: "alice@example.org" });
+  await assertFails(setDoc(doc(fs, "users", "alice"), profile()));
+});
+
+test("a config without the switch leaves registration open", async () => {
+  await seed(env, (fs) => setDoc(doc(fs, "config", "site"), { submissionsOpen: true }));
+  const fs = asUser(env, "alice", { email: "alice@example.org" });
+  await assertSucceeds(setDoc(doc(fs, "users", "alice"), profile()));
+});
+
+test("an existing participant can still edit their profile while registration is closed", async () => {
+  await seed(env, (fs) => setDoc(doc(fs, "users", "alice"), profile()));
+  await closeRegistration();
+  const fs = asUser(env, "alice", { email: "alice@example.org" });
+  await assertSucceeds(setDoc(doc(fs, "users", "alice"),
+    profile({ affiliation: "Institut Pasteur" }), { merge: true }));
+});
+
+test("an admin can still create a profile while registration is closed", async () => {
+  await seedAdmin(env, "boss");
+  await closeRegistration();
+  await assertSucceeds(setDoc(doc(asUser(env, "boss"), "users", "alice"), profile()));
+});

@@ -145,3 +145,33 @@ test("an ordinary participant still cannot rewrite somebody else's listing", asy
     doc(asUser(env, "mallory"), "participants_public", "alice"),
     pub({ displayName: "Renamed by a stranger" })));
 });
+
+// While registration is closed, a listing needs a profile behind it.
+const closeRegistration = () =>
+  seed(env, (fs) => setDoc(doc(fs, "config", "site"), { registrationOpen: false }));
+
+test("a bare account cannot publish a name while registration is closed", async () => {
+  await closeRegistration();
+  await assertFails(setDoc(doc(asUser(env, "alice"), "participants_public", "alice"), pub()));
+});
+
+test("someone who registered before it closed can still publish their name", async () => {
+  await seed(env, (fs) => setDoc(doc(fs, "users", "alice"), profile()));
+  await closeRegistration();
+  await assertSucceeds(setDoc(doc(asUser(env, "alice"), "participants_public", "alice"), pub()));
+});
+
+test("the registration batch cannot sneak a listing through while closed", async () => {
+  await closeRegistration();
+  const fs = asUser(env, "alice", { email: "alice@example.org" });
+  const batch = writeBatch(fs);
+  batch.set(doc(fs, "users", "alice"), profile(), { merge: true });
+  batch.set(doc(fs, "participants_public", "alice"), pub());
+  await assertFails(batch.commit());
+});
+
+test("an admin can still list somebody while registration is closed", async () => {
+  await seedAdmin(env, "boss");
+  await closeRegistration();
+  await assertSucceeds(setDoc(doc(asUser(env, "boss"), "participants_public", "alice"), pub()));
+});

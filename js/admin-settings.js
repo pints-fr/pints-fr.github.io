@@ -1,4 +1,5 @@
 import { addAdmin, getSiteConfig, saveSiteConfig } from "./db.js";
+import { isRegistrationOpen } from "./registration-utils.mjs";
 
 export async function mountSettingsTab(host, { adminUid }) {
   host.innerHTML = `
@@ -11,6 +12,19 @@ export async function mountSettingsTab(host, { adminUid }) {
       </label>
       <input id="cfg-date" type="date">
       <div class="actions"><button type="submit" id="date-save">Save date</button></div>
+    </form>
+
+    <h2>Registration</h2>
+    <form id="reg-form" novalidate>
+      <div class="checkline">
+        <input id="reg-open" type="checkbox">
+        <label for="reg-open">Registration is open
+          <span class="hint">Untick to stop new accounts. People who already registered can
+            still sign in, edit their profile, and submit an abstract while submissions are
+            open. Enforced by the security rules as well as the registration page.</span>
+        </label>
+      </div>
+      <div class="actions"><button type="submit" id="reg-save">Save registration</button></div>
     </form>
 
     <h2>Submission window</h2>
@@ -40,6 +54,7 @@ export async function mountSettingsTab(host, { adminUid }) {
 
   const msg = host.querySelector("#cfg-msg");
   const openEl = host.querySelector("#cfg-open");
+  const regOpenEl = host.querySelector("#reg-open");
   const dateEl = host.querySelector("#cfg-date");
   const deadlineEl = host.querySelector("#cfg-deadline");
   const cfgSave = host.querySelector("#cfg-save");
@@ -53,6 +68,7 @@ export async function mountSettingsTab(host, { adminUid }) {
   try {
     const config = await getSiteConfig();
     openEl.checked = Boolean(config?.submissionsOpen);
+    regOpenEl.checked = isRegistrationOpen(config);
     dateEl.value = config?.eventDate ?? "";
     const deadline = config?.submissionDeadline?.toDate?.();
     if (deadline) {
@@ -80,6 +96,23 @@ export async function mountSettingsTab(host, { adminUid }) {
       console.error("[pints] saveSiteConfig eventDate", err);
     } finally {
       dateSave.disabled = false;
+    }
+  });
+
+  host.querySelector("#reg-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const regSave = host.querySelector("#reg-save");
+    regSave.disabled = true;
+    try {
+      await saveSiteConfig({ registrationOpen: regOpenEl.checked });
+      say(regOpenEl.checked
+        ? "Saved. Registration is open."
+        : "Saved. Registration is closed.", "ok");
+    } catch (err) {
+      say("Could not save the registration setting.", "err");
+      console.error("[pints] saveSiteConfig registrationOpen", err);
+    } finally {
+      regSave.disabled = false;
     }
   });
 

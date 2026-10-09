@@ -1,10 +1,11 @@
 import { mountLayout, setAuthLink } from "./layout.js";
 import { onUser } from "./auth.js";
 import { hydrateMarkdownHosts } from "./content-hydrate.js";
-import { getHeroPhotos, getMyAbstract } from "./db.js";
+import { getHeroPhotos, getMyAbstract, getSiteConfig } from "./db.js";
 import { mountHeroSlider } from "./hero-slider.js";
 import { heroPhotos } from "./hero-utils.mjs";
 import { withNext } from "./redirect-utils.mjs";
+import { isRegistrationOpen } from "./registration-utils.mjs";
 import { EVENT } from "./config.mjs";
 import { googleCalendarUrl, outlookCalendarUrl, icsContent } from "./calendar-utils.mjs";
 import { download } from "./download.js";
@@ -44,6 +45,16 @@ async function updateSubmitCta(user) {
   });
   if (token !== submitCtaToken) return; // superseded by a later auth state
   submitCta.href = mine ? "abstracts.html" : "submit.html";
+}
+
+// The home page's "Register" button, taken down while registration is closed.
+// Not awaited: it is one button, and the page copy should not wait on it. A
+// failed read leaves the button up, and register.html says it is closed.
+const registerCta = document.getElementById("register-cta");
+if (registerCta) {
+  getSiteConfig()
+    .then((config) => { registerCta.hidden = !isRegistrationOpen(config); })
+    .catch((err) => console.error("[pints] register cta", err));
 }
 
 await hydrateMarkdownHosts();
