@@ -14,6 +14,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
 import { db, publicDb } from "./firebase.js";
 import { CURRENT_EDITION } from "./config.mjs";
+import { newLinkToken } from "./registration-utils.mjs";
 
 const snapData = (snap) => ({ id: snap.id, ...snap.data() });
 
@@ -40,11 +41,16 @@ const publicProjection = (displayName, affiliation) => ({
  * `publish` gates is not consent but *readiness*: an address nobody has proved
  * they own should not put a name on a public page, so registration passes
  * false and the account page publishes once verification comes back true.
+ *
+ * `registrationLink` is for registering after registration has closed: the
+ * profile records the token, and the same batch spends the link.
+ * firestore.rules accepts the profile only if both happen together
+ * (redeemsLink()).
  */
 export async function saveProfile(
   uid,
   { email, displayName, affiliation },
-  { publish = true } = {},
+  { publish = true, registrationLink = null } = {},
 ) {
   const clean = {
     email,
@@ -53,6 +59,18 @@ export async function saveProfile(
     edition: CURRENT_EDITION,
     updatedAt: serverTimestamp(),
   };
+  if (registrationLink) {
+    const batch = writeBatch(db);
+    batch.set(doc(db, "users", uid), { ...clean, registrationLink }, { merge: true });
+    batch.update(doc(db, "registration_links", registrationLink),
+      { usedBy: uid, usedAt: serverTimestamp() });
+    if (publish) {
+      batch.set(doc(db, "participants_public", uid),
+        publicProjection(clean.displayName, clean.affiliation));
+    }
+    await batch.commit();
+    return;
+  }
   if (!publish) {
     await setDoc(doc(db, "users", uid), clean, { merge: true });
     return;
@@ -378,6 +396,36 @@ export async function saveScheduleItem(id, data) {
 }
 
 export const deleteScheduleItem = (id) => deleteDoc(doc(db, "schedule", id));
+
+// -------------------------------------------------- late-registration links
+
+/**
+ * Make a single-use link for somebody who missed the registration deadline.
+ * The document id is the token, so it is drawn from crypto, not addDoc().
+ */
+export async function createRegistrationLink(adminUid, hours) {
+  const token = newLinkToken(crypto.getRandomValues(new Uint8Array(16)));
+  await setDoc(doc(db, "registration_links", token), {
+    createdBy: adminUid,
+    createdAt: serverTimestamp(),
+    expiresAt: new Date(Date.now() + hours * 3600_000),
+  });
+  return token;
+}
+
+// publicDb: register.html reads this signed out, and it is `allow get: if true`.
+export async function getRegistrationLink(token) {
+  const snap = await getDoc(doc(publicDb, "registration_links", token));
+  return snap.exists() ? snapData(snap) : null;
+}
+
+export async function listRegistrationLinks() {
+  return (await getDocs(collection(db, "registration_links"))).docs.map(snapData);
+}
+
+/** Revoke a link. Deleting it is all revoking takes. */
+export const deleteRegistrationLink = (token) =>
+  deleteDoc(doc(db, "registration_links", token));
 
 // ----------------------------------------------------------------- settings
 

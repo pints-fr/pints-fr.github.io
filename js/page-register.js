@@ -1,10 +1,10 @@
 import { mountLayout, setAuthLink } from "./layout.js";
 import { warnIfUnconfigured } from "./firebase.js";
 import { friendlyAuthError, onUser, signUp } from "./auth.js";
-import { getSiteConfig, saveProfile } from "./db.js";
+import { getRegistrationLink, getSiteConfig, saveProfile } from "./db.js";
 import { destinationAfterAuth, withNext } from "./redirect-utils.mjs";
 import { LIMITS } from "./config.mjs";
-import { isRegistrationOpen } from "./registration-utils.mjs";
+import { isRegistrationOpen, linkStatus } from "./registration-utils.mjs";
 
 mountLayout();
 
@@ -17,7 +17,12 @@ const passwordEl = document.getElementById("password");
 const rememberEl = document.getElementById("remember");
 const submitBtn = document.getElementById("register");
 
-const next = new URLSearchParams(location.search).get("next");
+const params = new URLSearchParams(location.search);
+const next = params.get("next");
+// A late-registration link from the organizers (Admin > Settings). Only spent
+// when registration is actually closed; while it is open the link is ignored,
+// so it stays good for later.
+const linkToken = params.get("link");
 document.getElementById("to-login").href = withNext("login.html", next);
 
 const say = (text, kind = "err") => {
@@ -32,6 +37,9 @@ if (warnIfUnconfigured(msg)) {
   // the "check your inbox" message with it. Hold the new registrant here until
   // they choose to move on, exactly as the sign-in page does.
   let justRegistered = false;
+  // Set once the link has been checked and is needed: registration is closed
+  // and this link still works.
+  let usingLink = null;
 
   onUser(({ user, isAdmin }) => {
     setAuthLink({ signedIn: Boolean(user), isAdmin });
@@ -76,7 +84,7 @@ if (warnIfUnconfigured(msg)) {
       // publish:false — the public list waits for the address to be confirmed.
       // account.html publishes as soon as a fresh token says it has been.
       await saveProfile(user.uid, { email: user.email, displayName, affiliation },
-        { publish: false });
+        { publish: false, registrationLink: usingLink });
     } catch (err) {
       profileSaved = false;
       console.error("[pints] saveProfile during registration", err);
@@ -94,11 +102,32 @@ if (warnIfUnconfigured(msg)) {
     console.error("[pints] getSiteConfig", err);
     return null;
   });
-  if (!isRegistrationOpen(config)) showClosed();
+  if (!isRegistrationOpen(config)) {
+    const link = linkToken
+      ? await getRegistrationLink(linkToken).catch((err) => {
+        console.error("[pints] getRegistrationLink", err);
+        return null;
+      })
+      : null;
+    const status = linkToken ? linkStatus(link) : null;
+    if (status === "valid") {
+      usingLink = linkToken;
+      const until = link.expiresAt.toDate().toLocaleString(undefined,
+        { dateStyle: "long", timeStyle: "short" });
+      say(`Registration is closed, but this personal link from the organizers lets you `
+        + `register until ${until}. It works once.`, "warn");
+    } else {
+      showClosed({
+        used: "This registration link has already been used. ",
+        expired: "This registration link has expired. ",
+        missing: "This registration link is not valid. ",
+      }[status] ?? "");
+    }
+  }
 }
 
 /** Registration has been closed by the organizers: say so, and point onwards. */
-function showClosed() {
+function showClosed(reason = "") {
   form.hidden = true;
   document.getElementById("intro").hidden = true;
 
@@ -111,7 +140,7 @@ function showClosed() {
 
   msg.className = "msg warn";
   msg.replaceChildren(
-    document.createTextNode("Registration for PINTS is closed. Already registered? "),
+    document.createTextNode(`${reason}Registration for PINTS is closed. Already registered? `),
     signIn,
     document.createTextNode(". Need help? Please "),
     contact,
