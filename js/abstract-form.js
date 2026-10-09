@@ -387,7 +387,9 @@ export async function mountAbstractForm(
 
   if (frozen) notice("This abstract has been accepted. Contact the organizers to change it.");
   else if (isAdmin && !windowOpen) {
-    notice("You are an organizer, so you can submit even though submissions are closed.");
+    notice(editingSomeoneElse
+      ? "Submissions are closed, but as an organizer you can still edit this abstract."
+      : "You are an organizer, so you can submit even though submissions are closed.");
   } else if (!windowOpen) {
     notice("Submissions are closed. You can still read your abstract.");
   } else if (!verified) {
@@ -521,7 +523,10 @@ export async function mountAbstractForm(
    */
   async function submitForm({ notify = true } = {}) {
     const draft = collect();
-    const { errors } = validateAbstract(draft, { submissionsOpen, deadline });
+    // No window check for organizers: firestore.rules lets them write at any
+    // time, and refusing here would undo the `editable` exemption above at the
+    // last step. validateAbstract's defaults are "open, no deadline".
+    const { errors } = validateAbstract(draft, isAdmin ? {} : { submissionsOpen, deadline });
     if (errors.length) {
       sayErrors(errors);
       return false;
