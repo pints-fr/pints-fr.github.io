@@ -7,11 +7,12 @@ import {
 } from "./abstract-utils.mjs";
 import { disclosureShell, statusPill } from "./abstract-card.js";
 import {
-  ABSTRACT_EXPORT_COLUMNS, abstractExportRows, annotateAbstracts,
+  ABSTRACT_EXPORT_COLUMNS, BLIND_EXPORT_COLUMNS, abstractExportRows, annotateAbstracts,
+  blindExportRows, stripAuthors,
 } from "./abstract-export-utils.mjs";
 import {
-  describeReviewStats, reviewScoreMatrix, reviewStats, reviewerList, scoreOptions,
-  sortByMeanScore, sortByTitle, summariseScore,
+  countReviewNotes, describeReviewStats, myScoreSummary, reviewScoreMatrix, reviewStats,
+  reviewerLabels, reviewerList, scoreOptions, sortByMeanScore, sortByTitle, summariseScore,
 } from "./review-utils.mjs";
 import { abstractDeletionPlan, describeAbstractDeletion } from "./deletion-utils.mjs";
 import { renderAbstractHtml } from "./markdown.js";
@@ -21,6 +22,8 @@ import { deleteAbstractCompletely } from "./functions.js";
 import { toCsv } from "./csv-utils.mjs";
 import { download } from "./download.js";
 import {
+  clearAllReviewNotes,
+  getSiteConfig,
   listAbstracts,
   listAdmins,
   listPublicAbstracts,
@@ -76,6 +79,9 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
   // caused it, and a save confirmation being wiped by the reload it triggered.
   host.innerHTML = `
     <div id="adm-msg" class="msg" role="status" aria-live="polite"></div>
+    <p id="adm-blind" class="msg warn" hidden>Reviewer mode is on: authors, affiliations and
+      other organizers' reviews are hidden, and only your own score is shown. Turn it off
+      under Settings.</p>
     <div id="adm-filters" class="filters"></div>
     <div class="actions" id="adm-exports"></div>
     <p id="adm-summary" class="muted"></p>
@@ -125,6 +131,13 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
   let shown = [];
   let reviewsById = new Map();
   let reviewers = [];
+  let labels = new Map();
+
+  // Reviewer mode, from config/site. Read on every render rather than once, so
+  // another organizer flipping it in Settings reaches this tab on the next action.
+  // Hiding is all it does — see the Settings hint — because any organizer can
+  // turn it off, so the rules have nothing to enforce.
+  let blind = false;
 
   buildFilters();
   buildExports();
@@ -139,6 +152,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     q.type = "text";
     q.autocomplete = "off";
     q.placeholder = "title, author, affiliation, text";
+    q.id = "adm-search";
     search.append(q);
 
     const status = picker({
@@ -224,24 +238,79 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     abstractsBtn.className = "secondary";
     abstractsBtn.id = "adm-export-abstracts";
     abstractsBtn.textContent = "Export abstracts (CSV)";
-    abstractsBtn.addEventListener("click", () =>
-      download("pints-abstracts.csv",
-        toCsv(abstractExportRows(shown), ABSTRACT_EXPORT_COLUMNS)));
+    // In reviewer mode the same button gives the blind version: no names, and
+    // the exporting organizer's own review alongside each abstract.
+    abstractsBtn.addEventListener("click", () => {
+      if (blind) {
+        download("pints-abstracts-blind.csv", toCsv(
+          blindExportRows(shown, { reviewsById, uid: adminUid }), BLIND_EXPORT_COLUMNS));
+      } else {
+        download("pints-abstracts.csv",
+          toCsv(abstractExportRows(shown), ABSTRACT_EXPORT_COLUMNS));
+      }
+    });
 
+    // Everybody's review, so it has no place in reviewer mode; render() hides it.
     const scoresBtn = document.createElement("button");
     scoresBtn.className = "secondary";
     scoresBtn.id = "adm-export-scores";
-    scoresBtn.textContent = "Export reviewer scores (CSV)";
+    scoresBtn.textContent = "Export reviewer scores and comments (CSV)";
     scoresBtn.addEventListener("click", () => {
-      const { columns, rows } = reviewScoreMatrix(shown, { reviewsById, reviewers });
-      download("pints-reviewer-scores.csv", toCsv(rows, columns));
+      if (blind) return;
+      const { columns, rows } = reviewScoreMatrix(shown, { reviewsById, labels });
+      download("pints-reviewer-scores-comments.csv", toCsv(rows, columns));
+    });
+
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "danger";
+    clearBtn.id = "adm-clear-notes";
+    clearBtn.textContent = "Delete all review comments";
+    clearBtn.title = "Remove every organizer's comment on every abstract. Scores are kept.";
+    clearBtn.addEventListener("click", async () => {
+      clearBtn.disabled = true;
+      try {
+        await clearNotes();
+      } catch (err) {
+        say("Could not delete the review comments.", "err");
+        console.error("[pints] clearAllReviewNotes", err);
+      } finally {
+        clearBtn.disabled = false;
+      }
     });
 
     const note = document.createElement("span");
     note.className = "muted";
     note.id = "adm-export-note";
 
-    bar.append(toggleAll, abstractsBtn, scoresBtn, note);
+    bar.append(toggleAll, abstractsBtn, scoresBtn, clearBtn, note);
+  }
+
+  /**
+   * Every comment by every organizer on every abstract — not just the ones the
+   * filters show, which is why the confirmation names the total. Counted from a
+   * fresh read, so the number promised is the number deleted.
+   */
+  async function clearNotes() {
+    const { notes, abstracts } = countReviewNotes(await listReviews());
+    if (!notes) {
+      say("There are no review comments to delete.", "ok");
+      return;
+    }
+    const choice = await confirmChoice({
+      title: "Delete all review comments",
+      message: `Delete ${notes} review comment${notes === 1 ? "" : "s"} on ${abstracts} `
+        + `abstract${abstracts === 1 ? "" : "s"}, written by every organizer? `
+        + "Scores are kept. This cannot be undone.",
+      choices: [
+        { value: "delete", label: "Delete all comments", className: "danger" },
+        { value: "cancel", label: "Cancel", className: "secondary" },
+      ],
+    });
+    if (choice !== "delete") return;
+    const result = await clearAllReviewNotes();
+    say(`Deleted ${result.notes} review comment${result.notes === 1 ? "" : "s"}. `
+      + "Scores are unchanged.", "warn");
+    await render();
   }
 
   /**
@@ -285,14 +354,18 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     const stats = reviewStats(stored.reviews);
     const mine = stored.reviews?.[adminUid] ?? {};
 
-    const headline = document.createElement("p");
-    headline.className = "muted";
-    headline.textContent = describeReviewStats(stats, reviewers.length || 1);
-    section.append(headline);
+    // Reviewer mode shows none of the committee's opinion: not the mean, not the
+    // legacy note, not the others' reviews. Only the organizer's own slot below.
+    if (!blind) {
+      const headline = document.createElement("p");
+      headline.className = "muted";
+      headline.textContent = describeReviewStats(stats, reviewers.length || 1);
+      section.append(headline);
+    }
 
     // A note written before reviews were per organizer. Shown read-only rather
     // than migrated: it belongs to whoever wrote it, and nobody can say who.
-    if (typeof stored.note === "string" && stored.note.trim()) {
+    if (!blind && typeof stored.note === "string" && stored.note.trim()) {
       const legacy = document.createElement("p");
       legacy.className = "muted";
       legacy.textContent = `Earlier shared note: ${stored.note}`;
@@ -335,18 +408,20 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
 
     section.append(score.wrapper, noteLabel, note, save);
 
+    // Anonymous even outside reviewer mode: the committee sees what was said,
+    // not who said it. The labels are page-wide, so one reviewer is the same
+    // number on every card and in the scores export.
     const others = stats.entries.filter((entry) => entry.uid !== adminUid);
-    if (others.length) {
+    if (!blind && others.length) {
       const details = document.createElement("details");
       const summaryEl = document.createElement("summary");
       summaryEl.textContent =
         `Other organizers (${others.length})`;
       details.append(summaryEl);
-      const nameOf = new Map(reviewers.map((r) => [r.uid, r.name]));
       for (const entry of others) {
         const line = document.createElement("p");
         line.className = "muted";
-        line.textContent = `${nameOf.get(entry.uid) ?? entry.uid}: `
+        line.textContent = `${labels.get(entry.uid) ?? "Reviewer"}: `
           + `${entry.score ?? "no score"}${entry.note ? ` — ${entry.note}` : ""}`;
         details.append(line);
       }
@@ -362,19 +437,23 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
    * without opening anything.
    */
   function row(abstract, published, refresh) {
-    const stats = reviewStats(reviewsById.get(abstract.id)?.reviews);
+    const reviews = reviewsById.get(abstract.id)?.reviews;
 
     const title = document.createElement("span");
     title.className = "summary-title";
     title.textContent = abstract.title ?? "(untitled)";
 
+    // Left empty rather than removed in reviewer mode, so the score column
+    // stays where the eye expects it.
     const who = document.createElement("span");
     who.className = "summary-authors";
-    who.textContent = summaryAuthorLine(abstract.authors);
+    who.textContent = blind ? "" : summaryAuthorLine(abstract.authors);
 
     const score = document.createElement("span");
     score.className = "summary-score";
-    score.textContent = summariseScore(stats);
+    score.textContent = blind
+      ? myScoreSummary(reviews, adminUid)
+      : summariseScore(reviewStats(reviews));
 
     const details = disclosureShell({
       className: "abstract admin-abstract",
@@ -575,8 +654,10 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     pull.title = "Remove this abstract from the public list and undo the acceptance";
     pull.hidden = abstract.status !== "accepted";
 
+    // Hidden in reviewer mode: the form lists every author and affiliation.
     const edit = document.createElement("button");
     edit.className = "secondary";
+    edit.hidden = blind;
     edit.textContent = editingId === abstract.id ? "Close editor" : "Edit";
     edit.addEventListener("click", () => {
       editingId = editingId === abstract.id ? null : abstract.id;
@@ -598,10 +679,13 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     editHost.className = "panel";
     editHost.hidden = true;
 
-    article.append(byline, from, affil, meta, body, figure,
+    // Reviewer mode: who wrote it, who submitted it and where they work all stay
+    // off the card. The title, topic, text and figure are what gets reviewed.
+    if (blind) article.append(meta, body, figure, reviewBlock(abstract), actions, editHost);
+    else article.append(byline, from, affil, meta, body, figure,
       reviewBlock(abstract), actions, editHost);
 
-    if (editingId === abstract.id) {
+    if (editingId === abstract.id && !blind) {
       mountEditor(abstract, published, refresh, editHost).catch((err) => {
         say("Could not open the editor.", "err");
         console.error("[pints] admin edit", err);
@@ -667,26 +751,49 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
   function sortShown(list) {
     if (sortBy === "title") return sortByTitle(list);
     return sortByMeanScore(list, {
-      reviewsById, direction: sortBy === "score-asc" ? "asc" : "desc",
+      reviewsById,
+      direction: sortBy === "score-asc" ? "asc" : "desc",
+      // The mean is the committee's opinion; in reviewer mode the order would
+      // leak it, so "score" means the organizer's own.
+      uid: blind ? adminUid : null,
     });
   }
 
   async function render() {
     // One read each for the whole page, joined in memory — far cheaper than a
     // per-card lookup, and it is what lets a card draw its reviews synchronously.
-    const [abstracts, published, users, reviews, admins] = await Promise.all([
+    const [abstracts, published, users, reviews, admins, config] = await Promise.all([
       listAbstracts(), listPublicAbstracts(), listUsers(), listReviews(), listAdmins(),
+      getSiteConfig(),
     ]);
+
+    blind = config?.reviewerMode === true;
+    host.querySelector("#adm-blind").hidden = !blind;
+    host.querySelector("#adm-search").placeholder = blind
+      ? "title, text"
+      : "title, author, affiliation, text";
+    host.querySelector("#adm-export-scores").hidden = blind;
+    if (blind) editingId = null;
 
     reviewsById = reviews;
     const usersById = new Map(users.map((u) => [u.id, u]));
     reviewers = reviewerList(admins, usersById);
+    labels = reviewerLabels(reviewers, reviewsById);
 
     const annotated = annotateAbstracts(abstracts, { published, users });
     // Sorted before grouping: groupByTopic preserves input order, so ordering
     // the flat list here is what orders each topic. The exports read `shown`,
     // so a CSV comes out in the order on screen.
-    shown = sortShown(filterAdminAbstracts(annotated, filters));
+    //
+    // In reviewer mode the search runs on author-less copies, so typing a
+    // colleague's name cannot single out their abstract; the full records are
+    // what get drawn and exported (the blind export strips them itself).
+    const matching = blind
+      ? new Set(filterAdminAbstracts(annotated.map(stripAuthors), filters).map((a) => a.id))
+      : null;
+    shown = sortShown(matching
+      ? annotated.filter((a) => matching.has(a.id))
+      : filterAdminAbstracts(annotated, filters));
 
     const counts = {};
     for (const a of abstracts) counts[a.status] = (counts[a.status] ?? 0) + 1;
@@ -722,6 +829,14 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
       : "";
     emptyEl.hidden = emptyEl.textContent === "";
   }
+
+  // Settings announces a change of review mode; this tab is already mounted.
+  document.addEventListener("pints:reviewer-mode", () => {
+    render().catch((err) => {
+      say("Could not reload abstracts.", "err");
+      console.error("[pints] admin abstracts", err);
+    });
+  });
 
   try {
     await render();

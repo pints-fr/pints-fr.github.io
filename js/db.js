@@ -2,7 +2,9 @@ import {
   addDoc,
   collection,
   deleteDoc,
+  deleteField,
   doc,
+  FieldPath,
   getDoc,
   getDocs,
   query,
@@ -273,6 +275,47 @@ export const saveMyReview = (abstractId, reviewerUid, { score, note }) =>
       },
     },
   }, { merge: true });
+
+/**
+ * Wipe every organizer's comment on every abstract, keeping their scores.
+ *
+ * Read fresh rather than from the console's last render, so a comment saved by
+ * another organizer a minute ago is not left behind. A field-path update per
+ * note, not a set: the score, `at`, and the decision fields beside each note
+ * must come through untouched. The legacy shared `note` goes too — it is a
+ * review comment like the others, just one nobody can attribute.
+ *
+ * Batches hold 500 writes; each abstract is one write however many notes it
+ * carries.
+ */
+export async function clearAllReviewNotes() {
+  const snap = await getDocs(collection(db, "abstract_reviews"));
+  const updates = [];
+  let notes = 0;
+  for (const d of snap.docs) {
+    const data = d.data();
+    const pairs = [];
+    for (const [uid, review] of Object.entries(data.reviews ?? {})) {
+      if (String(review?.note ?? "").trim()) {
+        pairs.push(new FieldPath("reviews", uid, "note"), "");
+        notes += 1;
+      }
+    }
+    if (typeof data.note === "string") {
+      pairs.push(new FieldPath("note"), deleteField());
+      if (data.note.trim()) notes += 1;
+    }
+    if (pairs.length) updates.push([d.ref, pairs]);
+  }
+  for (let i = 0; i < updates.length; i += 500) {
+    const batch = writeBatch(db);
+    for (const [ref, [field, value, ...more]] of updates.slice(i, i + 500)) {
+      batch.update(ref, field, value, ...more);
+    }
+    await batch.commit();
+  }
+  return { notes, abstracts: updates.length };
+}
 
 /** Record who accepted or rejected an abstract, without touching anyone's review. */
 export const recordDecision = (abstractId, decidedBy) =>

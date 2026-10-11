@@ -94,3 +94,45 @@ export function abstractExportRows(annotated) {
     body: a.body ?? "",
   }));
 }
+
+// ------------------------------------------------------------ reviewer mode
+
+/** Who wrote it, and where from: everything reviewer mode keeps off the screen. */
+const IDENTIFYING_KEYS = ["presenting", "authors", "affiliations", "submitterName", "submitterEmail"];
+
+/**
+ * The abstracts export in reviewer mode: no authors, no affiliations, no
+ * submitter, and the exporting organizer's OWN score and comment — never
+ * anybody else's, which is the other half of a blind review.
+ *
+ * toCsv() writes only the declared columns, so dropping them here is what
+ * keeps the names out of the file; the rows may still carry them.
+ */
+export const BLIND_EXPORT_COLUMNS = [
+  ...ABSTRACT_EXPORT_COLUMNS.filter((c) => !IDENTIFYING_KEYS.includes(c.key)),
+  { key: "myScore", label: "My score" },
+  { key: "myComment", label: "My comment" },
+];
+
+export function blindExportRows(annotated, { reviewsById = new Map(), uid } = {}) {
+  return abstractExportRows((annotated ?? []).map(stripAuthors)).map((row, i) => {
+    const mine = reviewsById.get(annotated[i].id)?.reviews?.[uid] ?? {};
+    return {
+      ...row,
+      myScore: Number.isInteger(mine.score) ? mine.score : "",
+      myComment: String(mine.note ?? ""),
+    };
+  });
+}
+
+/**
+ * A copy of an abstract with every identifying field removed.
+ *
+ * Search runs on these in reviewer mode. Hiding the names but still matching on
+ * them would let anybody find out which abstract is a colleague's by typing
+ * the colleague's name into the box.
+ */
+export function stripAuthors(abstract) {
+  const { authors, affiliations, submitterName, submitterEmail, ...rest } = abstract ?? {};
+  return { ...rest, authors: [], affiliations: [], submitterName: "", submitterEmail: "" };
+}

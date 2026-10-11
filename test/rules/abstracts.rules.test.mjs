@@ -1,7 +1,8 @@
 import test, { after, before, beforeEach } from "node:test";
 import { assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
 import {
-  collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where,
+  collection, deleteDoc, deleteField, doc, FieldPath, getDoc, getDocs, query, setDoc, updateDoc,
+  where,
 } from "firebase/firestore";
 import { asAnon, asUser, makeTestEnv, seed, seedAdmin, seedConfig } from "./helpers.mjs";
 
@@ -309,6 +310,30 @@ test("an organizer writes only their own slot of the reviews map", async () => {
   if (reviews.boss?.score !== 9 || reviews.olivia?.score !== 6) {
     throw new Error(`merge lost a reviewer: ${JSON.stringify(reviews)}`);
   }
+});
+
+// The write shape js/db.js clearAllReviewNotes() sends: field-path updates that
+// blank each note and drop the legacy one, leaving every score where it was.
+test("an organizer can clear every comment and keep the scores; nobody else can", async () => {
+  await seedAdmin(env, "boss");
+  await seed(env, (fs) => setDoc(doc(fs, "abstract_reviews", "alice"), {
+    note: "old shared note",
+    decidedBy: "boss",
+    reviews: { boss: { score: 9, note: "strong" }, olivia: { score: 6, note: "mixed" } },
+  }));
+  const clear = (fs) => updateDoc(doc(fs, "abstract_reviews", "alice"),
+    new FieldPath("reviews", "boss", "note"), "",
+    new FieldPath("reviews", "olivia", "note"), "",
+    new FieldPath("note"), deleteField());
+
+  await assertFails(clear(asUser(env, "alice")));
+  await assertSucceeds(clear(asUser(env, "boss")));
+
+  const data = (await getDoc(doc(asUser(env, "boss"), "abstract_reviews", "alice"))).data();
+  const ok = data.reviews.boss.score === 9 && data.reviews.olivia.score === 6
+    && data.reviews.boss.note === "" && data.reviews.olivia.note === ""
+    && !("note" in data) && data.decidedBy === "boss";
+  if (!ok) throw new Error(`clearing comments touched the wrong fields: ${JSON.stringify(data)}`);
 });
 
 test("published abstracts are world-readable but admin-write only", async () => {

@@ -54,6 +54,20 @@ export async function mountSettingsTab(host, { adminUid }) {
       </table>
     </div>
 
+    <h2>Abstract review</h2>
+    <form id="rev-form" novalidate>
+      <div class="checkline">
+        <input id="rev-mode" type="checkbox">
+        <label for="rev-mode">Reviewer mode (blind review)
+          <span class="hint">For every organizer, the Abstracts tab hides who wrote each abstract
+            and where they work, and shows only your own score and comment — not the mean, and
+            not anybody else's. Exporting abstracts then gives your own review and no names.
+            Untick it for the decision meeting.</span>
+        </label>
+      </div>
+      <div class="actions"><button type="submit" id="rev-save">Save review mode</button></div>
+    </form>
+
     <h2>Submission window</h2>
     <form id="cfg-form" novalidate>
       <div class="checkline">
@@ -82,6 +96,7 @@ export async function mountSettingsTab(host, { adminUid }) {
   const msg = host.querySelector("#cfg-msg");
   const openEl = host.querySelector("#cfg-open");
   const regOpenEl = host.querySelector("#reg-open");
+  const revModeEl = host.querySelector("#rev-mode");
   const dateEl = host.querySelector("#cfg-date");
   const deadlineEl = host.querySelector("#cfg-deadline");
   const cfgSave = host.querySelector("#cfg-save");
@@ -96,6 +111,7 @@ export async function mountSettingsTab(host, { adminUid }) {
     const config = await getSiteConfig();
     openEl.checked = Boolean(config?.submissionsOpen);
     regOpenEl.checked = isRegistrationOpen(config);
+    revModeEl.checked = config?.reviewerMode === true;
     dateEl.value = config?.eventDate ?? "";
     const deadline = config?.submissionDeadline?.toDate?.();
     if (deadline) {
@@ -140,6 +156,26 @@ export async function mountSettingsTab(host, { adminUid }) {
       console.error("[pints] saveSiteConfig registrationOpen", err);
     } finally {
       regSave.disabled = false;
+    }
+  });
+
+  host.querySelector("#rev-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const revSave = host.querySelector("#rev-save");
+    revSave.disabled = true;
+    try {
+      await saveSiteConfig({ reviewerMode: revModeEl.checked });
+      // The Abstracts tab is mounted once and stays mounted, so it is told to
+      // redraw rather than left showing the old mode until a reload.
+      document.dispatchEvent(new CustomEvent("pints:reviewer-mode"));
+      say(revModeEl.checked
+        ? "Saved. Reviewer mode is on: authors and other organizers' reviews are hidden."
+        : "Saved. Reviewer mode is off.", "ok");
+    } catch (err) {
+      say("Could not save the review mode.", "err");
+      console.error("[pints] saveSiteConfig reviewerMode", err);
+    } finally {
+      revSave.disabled = false;
     }
   });
 

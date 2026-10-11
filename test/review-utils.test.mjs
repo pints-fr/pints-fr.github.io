@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  describeReviewStats, isScore, reviewScoreMatrix, reviewStats, reviewerList, scoreOptions,
-  sortByMeanScore, sortByTitle, summariseScore,
+  countReviewNotes, describeReviewStats, isScore, myScore, myScoreSummary, reviewScoreMatrix,
+  reviewStats, reviewerLabels, reviewerList, scoreOptions, sortByMeanScore, sortByTitle,
+  summariseScore,
 } from "../js/review-utils.mjs";
 import { toCsv } from "../js/csv-utils.mjs";
 
@@ -93,16 +94,31 @@ const annotated = [
 ];
 
 const reviewsById = new Map([
-  ["alice", { reviews: { boss: { score: 9 }, olivia: { score: 8 } } }],
+  ["alice", { reviews: { boss: { score: 9 }, olivia: { score: 8, note: "clear and novel" } } }],
   ["bob", { reviews: { boss: { score: 4 } } }],
 ]);
 
-test("reviewScoreMatrix gives every organizer a column, in a fixed order", () => {
+test("reviewScoreMatrix gives every organizer an anonymous score and comment column", () => {
   const { columns } = reviewScoreMatrix(annotated, { reviewsById, reviewers });
   assert.deepEqual(columns.map((c) => c.label), [
     "Title", "Topic", "Status", "Presentation", "Submitted by",
-    "Ada Boss", "Olivia Nero", "Mean", "Scores",
+    "Reviewer 1 score", "Reviewer 1 comment", "Reviewer 2 score", "Reviewer 2 comment",
+    "Mean", "Scores",
   ]);
+});
+
+test("reviewScoreMatrix headers never carry a reviewer's name", () => {
+  const { columns } = reviewScoreMatrix(annotated, { reviewsById, reviewers });
+  for (const name of ["Ada", "Boss", "Olivia", "Nero"]) {
+    assert.ok(!columns.some((c) => c.label.includes(name)), name);
+  }
+});
+
+test("reviewScoreMatrix puts each organizer's comment beside their score", () => {
+  const { rows } = reviewScoreMatrix(annotated, { reviewsById, reviewers });
+  assert.equal(rows[0]["c:olivia"], "clear and novel");
+  assert.equal(rows[0]["c:boss"], "", "a score without a note leaves the comment blank");
+  assert.equal(rows[1]["c:olivia"], "");
 });
 
 test("reviewScoreMatrix leaves a reviewer's cell blank when they have not scored", () => {
@@ -134,8 +150,9 @@ test("the matrix feeds toCsv unchanged", () => {
   const { columns, rows } = reviewScoreMatrix(annotated, { reviewsById, reviewers });
   const csv = toCsv(rows, columns);
   const [header, first] = csv.trim().split("\r\n");
-  assert.equal(header, "Title,Topic,Status,Presentation,Submitted by,Ada Boss,Olivia Nero,Mean,Scores");
-  assert.equal(first, "Recurrent dynamics,systems,accepted,talk,Alice Dupont,9,8,8.5,2");
+  assert.equal(header, "Title,Topic,Status,Presentation,Submitted by,"
+    + "Reviewer 1 score,Reviewer 1 comment,Reviewer 2 score,Reviewer 2 comment,Mean,Scores");
+  assert.equal(first, "Recurrent dynamics,systems,accepted,talk,Alice Dupont,9,,8,clear and novel,8.5,2");
 });
 
 test("summariseScore fits the mean and the count into a list row", () => {
@@ -216,4 +233,60 @@ test("sortByMeanScore does not mutate its input, and survives nothing", () => {
 test("sortByTitle is alphabetical and case-insensitive", () => {
   const list = [{ title: "beta" }, { title: "Alpha" }, { title: "Gamma" }];
   assert.deepEqual(sortByTitle(list).map((x) => x.title), ["Alpha", "beta", "Gamma"]);
+});
+
+// ------------------------------------------------------------ anonymity
+
+test("reviewerLabels numbers organizers by uid, not by name", () => {
+  // Name order is Ada Zed, Bea Adams; uid order is "aaa", "zzz". Numbering by
+  // name would make "Reviewer 1" the alphabetically first organizer everywhere.
+  const labels = reviewerLabels([
+    { uid: "zzz", name: "Ada Zed" }, { uid: "aaa", name: "Bea Adams" },
+  ]);
+  assert.equal(labels.get("aaa"), "Reviewer 1");
+  assert.equal(labels.get("zzz"), "Reviewer 2");
+});
+
+test("reviewerLabels numbers a former organizer's review after the current ones", () => {
+  const labels = reviewerLabels(reviewers, new Map([
+    ["x", { reviews: { aaron: { score: 3 }, boss: { score: 5 } } }],
+  ]));
+  assert.deepEqual([...labels], [
+    ["boss", "Reviewer 1"], ["olivia", "Reviewer 2"], ["aaron", "Reviewer 3"],
+  ]);
+});
+
+test("myScore and myScoreSummary read only the one organizer's slot", () => {
+  const reviews = { boss: { score: 9 }, olivia: { note: "no number" } };
+  assert.equal(myScore(reviews, "boss"), 9);
+  assert.equal(myScore(reviews, "olivia"), null);
+  assert.equal(myScore(undefined, "boss"), null);
+  assert.equal(myScoreSummary(reviews, "boss"), "your score 9");
+  assert.equal(myScoreSummary(reviews, "olivia"), "not scored by you");
+});
+
+test("sortByMeanScore with a uid sorts by that organizer's score, not the mean", () => {
+  const list = [{ id: "a", title: "A" }, { id: "b", title: "B" }, { id: "c", title: "C" }];
+  const byId = new Map([
+    // The mean puts "a" first (8.5 vs 6); boss's own scores put "b" first.
+    ["a", { reviews: { boss: { score: 7 }, olivia: { score: 10 } } }],
+    ["b", { reviews: { boss: { score: 9 }, olivia: { score: 3 } } }],
+    ["c", { reviews: { olivia: { score: 10 } } }],
+  ]);
+  assert.deepEqual(sortByMeanScore(list, { reviewsById: byId }).map((a) => a.id), ["c", "a", "b"]);
+  assert.deepEqual(
+    sortByMeanScore(list, { reviewsById: byId, uid: "boss" }).map((a) => a.id),
+    ["b", "a", "c"], "c is unscored by boss, so it goes last");
+  assert.deepEqual(
+    sortByMeanScore(list, { reviewsById: byId, uid: "boss", direction: "asc" }).map((a) => a.id),
+    ["a", "b", "c"]);
+});
+
+test("countReviewNotes counts every non-blank comment, legacy ones included", () => {
+  assert.deepEqual(countReviewNotes(new Map([
+    ["a", { reviews: { boss: { score: 7, note: "fine" }, olivia: { note: "  " } } }],
+    ["b", { note: "old shared note", reviews: { boss: { note: "weak" } } }],
+    ["c", { reviews: { boss: { score: 4 } } }],
+  ])), { notes: 3, abstracts: 2 });
+  assert.deepEqual(countReviewNotes(new Map()), { notes: 0, abstracts: 0 });
 });

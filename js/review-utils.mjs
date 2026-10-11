@@ -69,6 +69,59 @@ export function summariseScore({ mean, count } = {}) {
   return `${mean.toFixed(1)} · ${count} scored`;
 }
 
+/** One organizer's own score on one abstract, or null. */
+export const myScore = (reviews, uid) => {
+  const score = reviews?.[uid]?.score;
+  return isScore(score) ? score : null;
+};
+
+/** "your score 7" — the collapsed row in reviewer mode, where the mean is hidden. */
+export function myScoreSummary(reviews, uid) {
+  const score = myScore(reviews, uid);
+  return score === null ? "not scored by you" : `your score ${score}`;
+}
+
+/**
+ * "Reviewer 1", "Reviewer 2"… — who wrote a review, without saying who.
+ *
+ * Numbered in uid order, NOT name order: `reviewers` is sorted by name, and
+ * numbering it as-is would make "Reviewer 1" the alphabetically first organizer
+ * on every abstract. One map for the whole page, so a label means the same
+ * person on every card and in the export.
+ *
+ * Someone who reviewed and has since lost admin rights still wrote a review; a
+ * uid found in `reviewsById` but not among `reviewers` is numbered after them.
+ */
+export function reviewerLabels(reviewers, reviewsById = new Map()) {
+  const uids = new Set((reviewers ?? []).map((r) => r.uid));
+  const strays = new Set();
+  for (const stored of reviewsById?.values?.() ?? []) {
+    for (const uid of Object.keys(stored?.reviews ?? {})) {
+      if (!uids.has(uid)) strays.add(uid);
+    }
+  }
+  const ordered = [...[...uids].sort(), ...[...strays].sort()];
+  return new Map(ordered.map((uid, i) => [uid, `Reviewer ${i + 1}`]));
+}
+
+/**
+ * How many comments "Delete all review comments" would remove, and from how
+ * many abstracts — counted the way db.js clearAllReviewNotes() counts them, so
+ * the confirmation does not promise a number the deletion then contradicts.
+ */
+export function countReviewNotes(reviewsById = new Map()) {
+  let notes = 0;
+  let abstracts = 0;
+  for (const stored of reviewsById?.values?.() ?? []) {
+    const here = Object.values(stored?.reviews ?? {})
+      .filter((review) => String(review?.note ?? "").trim()).length
+      + (String(stored?.note ?? "").trim() ? 1 : 0);
+    notes += here;
+    if (here) abstracts += 1;
+  }
+  return { notes, abstracts };
+}
+
 const collator = new Intl.Collator("en", { sensitivity: "base" });
 
 /**
@@ -85,9 +138,13 @@ const collator = new Intl.Collator("en", { sensitivity: "base" });
  * so the order is stable across renders — this list re-renders after every
  * action and rows must not shuffle under the cursor.
  */
-export function sortByMeanScore(list, { reviewsById = new Map(), direction = "desc" } = {}) {
+export function sortByMeanScore(list, { reviewsById = new Map(), direction = "desc", uid = null } = {}) {
   const sign = direction === "asc" ? 1 : -1;
-  const meanOf = (abstract) => reviewStats(reviewsById.get(abstract?.id)?.reviews).mean;
+  // `uid` is reviewer mode: sort by that organizer's own score, since the mean
+  // is everybody else's opinion and must not leak through the order.
+  const meanOf = uid
+    ? (abstract) => myScore(reviewsById.get(abstract?.id)?.reviews, uid)
+    : (abstract) => reviewStats(reviewsById.get(abstract?.id)?.reviews).mean;
   return [...(list ?? [])].sort((a, b) => {
     const [ma, mb] = [meanOf(a), meanOf(b)];
     if (ma === null && mb === null) return byTitle(a, b);
@@ -105,28 +162,38 @@ export function sortByTitle(list) {
 const byTitle = (a, b) => collator.compare(String(a?.title ?? ""), String(b?.title ?? ""));
 
 /**
- * The whole committee's scores as a spreadsheet: one row per abstract, one
- * column per organizer, then the mean and how many scored it.
+ * The whole committee's scores and comments as a spreadsheet: one row per
+ * abstract, a score column and a comment column per organizer, then the mean
+ * and how many scored it.
  *
- * `reviewers` fixes the column order, so a reviewer who has scored nothing
- * still gets a column — an empty column is a fact worth seeing when you are
- * chasing people for reviews.
+ * The columns are headed with `labels` ("Reviewer 2"), not names: reviews are
+ * anonymous to the committee, in the export as on screen. They are ordered by
+ * label, so "Reviewer 1" comes first. Every reviewer still gets their pair of
+ * columns when they have scored nothing — an empty column is a fact worth
+ * seeing when you are chasing people for reviews.
  */
-export function reviewScoreMatrix(annotated, { reviewsById = new Map(), reviewers = [] } = {}) {
+export function reviewScoreMatrix(
+  annotated,
+  { reviewsById = new Map(), reviewers = [], labels = reviewerLabels(reviewers, reviewsById) } = {},
+) {
+  const uids = [...labels.keys()];
   const columns = [
     { key: "title", label: "Title" },
     { key: "topic", label: "Topic" },
     { key: "status", label: "Status" },
     { key: "type", label: "Presentation" },
     { key: "submitter", label: "Submitted by" },
-    ...reviewers.map((reviewer) => ({ key: `r:${reviewer.uid}`, label: reviewer.name })),
+    ...uids.flatMap((uid) => [
+      { key: `r:${uid}`, label: `${labels.get(uid)} score` },
+      { key: `c:${uid}`, label: `${labels.get(uid)} comment` },
+    ]),
     { key: "mean", label: "Mean" },
     { key: "count", label: "Scores" },
   ];
 
   const rows = (annotated ?? []).map((abstract) => {
     const stats = reviewStats(reviewsById.get(abstract.id)?.reviews);
-    const byUid = new Map(stats.entries.map((entry) => [entry.uid, entry.score]));
+    const byUid = new Map(stats.entries.map((entry) => [entry.uid, entry]));
     const row = {
       title: abstract.title ?? "",
       topic: abstract.topic ?? "",
@@ -136,8 +203,9 @@ export function reviewScoreMatrix(annotated, { reviewsById = new Map(), reviewer
       mean: stats.mean ?? "",
       count: stats.count,
     };
-    for (const reviewer of reviewers) {
-      row[`r:${reviewer.uid}`] = byUid.get(reviewer.uid) ?? "";
+    for (const uid of uids) {
+      row[`r:${uid}`] = byUid.get(uid)?.score ?? "";
+      row[`c:${uid}`] = byUid.get(uid)?.note ?? "";
     }
     return row;
   });
