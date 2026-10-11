@@ -1,4 +1,5 @@
 import { TOPIC_LABELS } from "./config.mjs";
+import { isScore } from "./review-utils.mjs";
 
 /**
  * Flattening for the review console: joins, projections, and CSV shapes.
@@ -119,7 +120,7 @@ export function blindExportRows(annotated, { reviewsById = new Map(), uid } = {}
     const mine = reviewsById.get(annotated[i].id)?.reviews?.[uid] ?? {};
     return {
       ...row,
-      myScore: Number.isInteger(mine.score) ? mine.score : "",
+      myScore: isScore(mine.score) ? mine.score : "",
       myComment: String(mine.note ?? ""),
     };
   });

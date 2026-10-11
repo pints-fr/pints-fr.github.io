@@ -124,8 +124,8 @@ const blindInput = () => annotateAbstracts([abstract()], {
 
 const blindReviews = new Map([
   ["alice", { reviews: {
-    boss: { score: 8, note: "solid methods" },
-    olivia: { score: 3, note: "olivia's private opinion" },
+    boss: { score: 4, note: "solid methods" },
+    olivia: { score: 1, note: "olivia's private opinion" },
   } }],
 ]);
 
@@ -143,11 +143,20 @@ test("the blind export carries no author, affiliation, or submitter", () => {
 
 test("the blind export gives the exporting organizer's own review and nobody else's", () => {
   const [row] = blindExportRows(blindInput(), { reviewsById: blindReviews, uid: "boss" });
-  assert.equal(row.myScore, 8);
+  assert.equal(row.myScore, 4);
   assert.equal(row.myComment, "solid methods");
   const csv = toCsv([row], BLIND_EXPORT_COLUMNS);
   assert.ok(!csv.includes("olivia's private opinion"));
-  assert.ok(!csv.split("\r\n")[1].includes(",3,"), "olivia's score is not in the row");
+  assert.ok(!csv.split("\r\n")[1].includes(",1,"), "olivia's score is not in the row");
+});
+
+test("the blind export leaves out a score from the old ten-point scale", () => {
+  const [row] = blindExportRows(blindInput(), {
+    reviewsById: new Map([["alice", { reviews: { boss: { score: 7, note: "kept" } } }]]),
+    uid: "boss",
+  });
+  assert.equal(row.myScore, "");
+  assert.equal(row.myComment, "kept");
 });
 
 test("the blind export leaves an unreviewed abstract's review cells blank", () => {

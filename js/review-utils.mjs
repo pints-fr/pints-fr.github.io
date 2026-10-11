@@ -11,16 +11,43 @@
  * organizers reviewing at once from overwriting each other.
  */
 
-export const SCORE_MIN = 1;
-export const SCORE_MAX = 10;
+/**
+ * The committee's four-point scale. A number per answer, so a mean still makes
+ * sense and the spreadsheet sorts, but every place a score is shown to a person
+ * carries its word as well: "3" alone does not say whether that is praise.
+ *
+ * 1 is a veto, not merely a low mark — see `vetoes` in reviewStats().
+ */
+export const SCORE_LABELS = Object.freeze({
+  1: "veto: reject",
+  2: "ok",
+  3: "good",
+  4: "accept",
+});
 
-/** Scores are whole numbers 1–10. Anything else is treated as "not scored". */
+export const SCORE_MIN = 1;
+export const SCORE_MAX = 4;
+export const VETO = 1;
+
+/**
+ * Scores are whole numbers 1–4. Anything else is treated as "not scored" —
+ * including a 5–10 left over from the old ten-point scale, which cannot be
+ * read as a point on this one.
+ */
 export const isScore = (value) =>
   Number.isInteger(value) && value >= SCORE_MIN && value <= SCORE_MAX;
 
-/** The 1–10 options, for building a <select>. */
+/** A score saved under the old 1–10 scale, which no longer counts. */
+export const isRetiredScore = (value) =>
+  Number.isInteger(value) && value > SCORE_MAX && value <= 10;
+
+/** The 1–4 options, for building a <select>. */
 export const scoreOptions = () =>
   Array.from({ length: SCORE_MAX - SCORE_MIN + 1 }, (_, i) => SCORE_MIN + i);
+
+/** "3 (good)" — a score as a person reads it. */
+export const scoreLabel = (score) =>
+  (isScore(score) ? `${score} (${SCORE_LABELS[score]})` : "");
 
 /**
  * Read one abstract's reviews map into something sortable and displayable.
@@ -44,29 +71,34 @@ export function reviewStats(reviews) {
   return {
     entries,
     count: scored.length,
-    // One decimal: a mean of 7.333… reads as false precision on a 1–10 scale
+    // One decimal: a mean of 2.333… reads as false precision on a 1–4 scale
     // with three reviewers.
     mean: scored.length ? Math.round((total / scored.length) * 10) / 10 : null,
+    // Counted separately because a mean hides them: three 4s and a veto
+    // average 3.3, which reads as "good" about an abstract somebody rejected.
+    vetoes: scored.filter((entry) => entry.score === VETO).length,
   };
 }
 
-/** "Mean 7.3 · 3 of 5 organizers scored" — or plain English when nobody has. */
-export function describeReviewStats({ mean, count }, reviewerCount) {
+const vetoText = (vetoes) => (vetoes ? ` · ${vetoes} veto${vetoes === 1 ? "" : "es"}` : "");
+
+/** "Mean 2.7 · 3 of 5 organizers scored · 1 veto" — or plain English when nobody has. */
+export function describeReviewStats({ mean, count, vetoes = 0 }, reviewerCount) {
   if (!count) return "Not scored yet.";
   return `Mean ${mean.toFixed(1)} · ${count} of ${reviewerCount} organizer`
-    + `${reviewerCount === 1 ? "" : "s"} scored`;
+    + `${reviewerCount === 1 ? "" : "s"} scored${vetoText(vetoes)}`;
 }
 
 /**
- * "7.3 · 3 scored" — the same two numbers as describeReviewStats, short enough
- * to sit in a collapsed list row beside a title.
+ * "2.7 · 3 scored · 1 veto" — the same numbers as describeReviewStats, short
+ * enough to sit in a collapsed list row beside a title.
  *
  * `count` is how many organizers put a number on it, which is not how many
  * wrote something: a note without a score is an opinion, not a vote.
  */
-export function summariseScore({ mean, count } = {}) {
+export function summariseScore({ mean, count, vetoes = 0 } = {}) {
   if (!count) return "not scored";
-  return `${mean.toFixed(1)} · ${count} scored`;
+  return `${mean.toFixed(1)} · ${count} scored${vetoText(vetoes)}`;
 }
 
 /** One organizer's own score on one abstract, or null. */
@@ -75,10 +107,10 @@ export const myScore = (reviews, uid) => {
   return isScore(score) ? score : null;
 };
 
-/** "your score 7" — the collapsed row in reviewer mode, where the mean is hidden. */
+/** "your score 3 (good)" — the collapsed row in reviewer mode, where the mean is hidden. */
 export function myScoreSummary(reviews, uid) {
   const score = myScore(reviews, uid);
-  return score === null ? "not scored by you" : `your score ${score}`;
+  return score === null ? "not scored by you" : `your score ${scoreLabel(score)}`;
 }
 
 /**
@@ -163,8 +195,9 @@ const byTitle = (a, b) => collator.compare(String(a?.title ?? ""), String(b?.tit
 
 /**
  * The whole committee's scores and comments as a spreadsheet: one row per
- * abstract, a score column and a comment column per organizer, then the mean
- * and how many scored it.
+ * abstract, a score column and a comment column per organizer, then the mean,
+ * how many scored it, and how many vetoed it. Scores are bare numbers here, not
+ * "3 (good)": a spreadsheet has to be able to sort and average them.
  *
  * The columns are headed with `labels` ("Reviewer 2"), not names: reviews are
  * anonymous to the committee, in the export as on screen. They are ordered by
@@ -189,6 +222,7 @@ export function reviewScoreMatrix(
     ]),
     { key: "mean", label: "Mean" },
     { key: "count", label: "Scores" },
+    { key: "vetoes", label: "Vetoes" },
   ];
 
   const rows = (annotated ?? []).map((abstract) => {
@@ -202,6 +236,7 @@ export function reviewScoreMatrix(
       submitter: abstract.submitterName ?? "",
       mean: stats.mean ?? "",
       count: stats.count,
+      vetoes: stats.vetoes,
     };
     for (const uid of uids) {
       row[`r:${uid}`] = byUid.get(uid)?.score ?? "";

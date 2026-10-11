@@ -12,7 +12,8 @@ import {
 } from "./abstract-export-utils.mjs";
 import {
   countReviewNotes, describeReviewStats, myScoreSummary, reviewScoreMatrix, reviewStats,
-  reviewerLabels, reviewerList, scoreOptions, sortByMeanScore, sortByTitle, summariseScore,
+  reviewerLabels, reviewerList, SCORE_LABELS, isRetiredScore, isScore, scoreLabel,
+  scoreOptions, sortByMeanScore, sortByTitle, summariseScore,
 } from "./review-utils.mjs";
 import { abstractDeletionPlan, describeAbstractDeletion } from "./deletion-utils.mjs";
 import { renderAbstractHtml } from "./markdown.js";
@@ -32,6 +33,7 @@ import {
   publishAbstract,
   recordDecision,
   saveMyReview,
+  saveSiteConfig,
   setAbstractStatus,
   returnToReview,
 } from "./db.js";
@@ -79,9 +81,17 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
   // caused it, and a save confirmation being wiped by the reload it triggered.
   host.innerHTML = `
     <div id="adm-msg" class="msg" role="status" aria-live="polite"></div>
+    <div class="checkline">
+      <input id="adm-blind-mode" type="checkbox">
+      <label for="adm-blind-mode">Reviewer mode (blind review)
+        <span class="hint">For every organizer: hides who wrote each abstract and where they
+          work, and shows only your own score and comment — not the mean, and not anybody
+          else's. Exporting abstracts then gives your own review and no names. Untick it for
+          the decision meeting.</span>
+      </label>
+    </div>
     <p id="adm-blind" class="msg warn" hidden>Reviewer mode is on: authors, affiliations and
-      other organizers' reviews are hidden, and only your own score is shown. Turn it off
-      under Settings.</p>
+      other organizers' reviews are hidden, and only your own score is shown.</p>
     <div id="adm-filters" class="filters"></div>
     <div class="actions" id="adm-exports"></div>
     <p id="adm-summary" class="muted"></p>
@@ -134,10 +144,39 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
   let labels = new Map();
 
   // Reviewer mode, from config/site. Read on every render rather than once, so
-  // another organizer flipping it in Settings reaches this tab on the next action.
-  // Hiding is all it does — see the Settings hint — because any organizer can
-  // turn it off, so the rules have nothing to enforce.
+  // another organizer flipping it reaches this tab on the next action. Hiding is
+  // all it does, because any organizer can turn it off with the checkbox above,
+  // so the rules have nothing to enforce.
   let blind = false;
+  const blindToggle = host.querySelector("#adm-blind-mode");
+
+  // Saved straight away rather than behind a Save button: it is one switch, and
+  // a checkbox that showed one mode while the list showed the other would be
+  // worse than an accidental click, which the same click undoes.
+  blindToggle.addEventListener("change", async () => {
+    const on = blindToggle.checked;
+    blindToggle.disabled = true;
+    try {
+      await saveSiteConfig({ reviewerMode: on });
+    } catch (err) {
+      blindToggle.checked = !on;
+      blindToggle.disabled = false;
+      say("Could not change the review mode.", "err");
+      console.error("[pints] saveSiteConfig reviewerMode", err);
+      return;
+    }
+    try {
+      await render();
+      say(on
+        ? "Reviewer mode is on for every organizer."
+        : "Reviewer mode is off. Authors and the committee's reviews are visible again.", "ok");
+    } catch (err) {
+      say("Saved, but could not reload the abstracts. Reload the page.", "err");
+      console.error("[pints] admin abstracts", err);
+    } finally {
+      blindToggle.disabled = false;
+    }
+  });
 
   buildFilters();
   buildExports();
@@ -375,10 +414,21 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     const score = picker({
       label: "Your score",
       options: [{ value: "", label: "—" },
-        ...scoreOptions().map((n) => ({ value: String(n), label: String(n) }))],
-      value: Number.isInteger(mine.score) ? String(mine.score) : "",
+        ...scoreOptions().map((n) => ({ value: String(n), label: `${n} — ${SCORE_LABELS[n]}` }))],
+      value: isScore(mine.score) ? String(mine.score) : "",
     });
-    score.wrapper.title = "1 to 10. Leave blank to review without scoring.";
+    score.wrapper.title = "1 is a veto. Leave blank to review without scoring.";
+
+    // A 5–10 from before the four-point scale no longer counts toward anything.
+    // Said out loud, so the organizer knows to rescore rather than assuming the
+    // blank picker lost their review.
+    if (isRetiredScore(mine.score)) {
+      const retired = document.createElement("p");
+      retired.className = "msg warn";
+      retired.textContent = `You scored this ${mine.score} out of 10 on the old scale. `
+        + "That no longer counts: choose a score from 1 to 4.";
+      section.append(retired);
+    }
 
     const noteLabel = document.createElement("label");
     noteLabel.textContent = "Your note (never visible to the submitter)";
@@ -422,7 +472,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
         const line = document.createElement("p");
         line.className = "muted";
         line.textContent = `${labels.get(entry.uid) ?? "Reviewer"}: `
-          + `${entry.score ?? "no score"}${entry.note ? ` — ${entry.note}` : ""}`;
+          + `${scoreLabel(entry.score) || "no score"}${entry.note ? ` — ${entry.note}` : ""}`;
         details.append(line);
       }
       section.append(details);
@@ -768,6 +818,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     ]);
 
     blind = config?.reviewerMode === true;
+    blindToggle.checked = blind;
     host.querySelector("#adm-blind").hidden = !blind;
     host.querySelector("#adm-search").placeholder = blind
       ? "title, text"
@@ -829,14 +880,6 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
       : "";
     emptyEl.hidden = emptyEl.textContent === "";
   }
-
-  // Settings announces a change of review mode; this tab is already mounted.
-  document.addEventListener("pints:reviewer-mode", () => {
-    render().catch((err) => {
-      say("Could not reload abstracts.", "err");
-      console.error("[pints] admin abstracts", err);
-    });
-  });
 
   try {
     await render();

@@ -1,36 +1,50 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  countReviewNotes, describeReviewStats, isScore, myScore, myScoreSummary, reviewScoreMatrix,
-  reviewStats, reviewerLabels, reviewerList, scoreOptions, sortByMeanScore, sortByTitle,
-  summariseScore,
+  SCORE_LABELS, countReviewNotes, describeReviewStats, isRetiredScore, isScore, myScore,
+  myScoreSummary, reviewScoreMatrix, reviewStats, reviewerLabels, reviewerList, scoreLabel,
+  scoreOptions, sortByMeanScore, sortByTitle, summariseScore,
 } from "../js/review-utils.mjs";
 import { toCsv } from "../js/csv-utils.mjs";
 
-test("only whole numbers 1 to 10 count as a score", () => {
-  for (const good of [1, 5, 10]) assert.equal(isScore(good), true, `${good}`);
-  for (const bad of [0, 11, -1, 7.5, "8", null, undefined, NaN]) {
+test("only whole numbers 1 to 4 count as a score", () => {
+  for (const good of [1, 2, 3, 4]) assert.equal(isScore(good), true, `${good}`);
+  for (const bad of [0, 5, 10, -1, 2.5, "3", null, undefined, NaN]) {
     assert.equal(isScore(bad), false, String(bad));
   }
-  assert.deepEqual(scoreOptions(), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.deepEqual(scoreOptions(), [1, 2, 3, 4]);
+});
+
+test("every score has its word, and 1 is the veto", () => {
+  assert.deepEqual(scoreOptions().map((n) => SCORE_LABELS[n]),
+    ["veto: reject", "ok", "good", "accept"]);
+  assert.equal(scoreLabel(1), "1 (veto: reject)");
+  assert.equal(scoreLabel(3), "3 (good)");
+  assert.equal(scoreLabel(7), "", "an old ten-point score has no word on this scale");
+  assert.equal(scoreLabel(null), "");
+});
+
+test("a 5 to 10 is recognised as a score from the old ten-point scale", () => {
+  for (const old of [5, 7, 10]) assert.equal(isRetiredScore(old), true, `${old}`);
+  for (const not of [1, 4, 11, 42, null, "7"]) assert.equal(isRetiredScore(not), false, `${not}`);
 });
 
 test("reviewStats averages the scores and rounds to one decimal", () => {
   const stats = reviewStats({
-    olivia: { score: 7 }, boss: { score: 8 }, kai: { score: 7 },
+    olivia: { score: 3 }, boss: { score: 4 }, kai: { score: 3 },
   });
   assert.equal(stats.count, 3);
-  assert.equal(stats.mean, 7.3);
+  assert.equal(stats.mean, 3.3);
 });
 
 test("reviewStats treats a note without a score as a review, not a zero", () => {
   const stats = reviewStats({
-    olivia: { score: 9, note: "strong" },
+    olivia: { score: 3, note: "strong" },
     boss: { note: "conflict of interest, abstaining" },
   });
   assert.equal(stats.entries.length, 2, "both organizers reviewed it");
   assert.equal(stats.count, 1, "only one of them scored it");
-  assert.equal(stats.mean, 9, "the abstention must not drag the mean down");
+  assert.equal(stats.mean, 3, "the abstention must not drag the mean down");
 });
 
 // Junk can only get in by hand-editing the document, but a mean is the kind of
@@ -38,13 +52,15 @@ test("reviewStats treats a note without a score as a review, not a zero", () => 
 test("reviewStats drops entries with neither a valid score nor a note", () => {
   const stats = reviewStats({
     olivia: { score: 42 },
-    boss: { score: "9" },
+    boss: { score: "3" },
     kai: { score: null, note: "   " },
-    ada: { score: 6 },
-    zoe: { score: 99, note: "typo in my score, meant 9" },
+    ada: { score: 2 },
+    zoe: { score: 99, note: "typo in my score, meant 3" },
+    // From the old ten-point scale: a 7 there is not a 7 here, or anything else.
+    sam: { score: 7 },
   });
   assert.equal(stats.count, 1);
-  assert.equal(stats.mean, 6);
+  assert.equal(stats.mean, 2);
   assert.deepEqual(stats.entries.map((e) => e.uid), ["ada", "zoe"],
     "a junk score with a note survives as a note; a junk score alone does not");
   assert.equal(stats.entries.find((e) => e.uid === "zoe").score, null);
@@ -53,16 +69,27 @@ test("reviewStats drops entries with neither a valid score nor a note", () => {
 test("reviewStats on nothing at all", () => {
   for (const empty of [undefined, null, {}]) {
     const stats = reviewStats(empty);
-    assert.deepEqual(stats, { entries: [], count: 0, mean: null });
+    assert.deepEqual(stats, { entries: [], count: 0, mean: null, vetoes: 0 });
   }
 });
 
 test("describeReviewStats says something useful either way", () => {
   assert.equal(describeReviewStats(reviewStats({}), 4), "Not scored yet.");
-  assert.equal(describeReviewStats(reviewStats({ a: { score: 8 } }), 4),
-    "Mean 8.0 · 1 of 4 organizers scored");
-  assert.equal(describeReviewStats(reviewStats({ a: { score: 8 } }), 1),
-    "Mean 8.0 · 1 of 1 organizer scored");
+  assert.equal(describeReviewStats(reviewStats({ a: { score: 3 } }), 4),
+    "Mean 3.0 · 1 of 4 organizers scored");
+  assert.equal(describeReviewStats(reviewStats({ a: { score: 3 } }), 1),
+    "Mean 3.0 · 1 of 1 organizer scored");
+});
+
+// Three accepts and a veto average 3.3 — "good" — about an abstract one
+// organizer rejected outright. The mean alone must not be the whole story.
+test("a veto is counted on its own, because the mean hides it", () => {
+  const stats = reviewStats({ a: { score: 4 }, b: { score: 4 }, c: { score: 4 }, d: { score: 1 } });
+  assert.equal(stats.vetoes, 1);
+  assert.equal(describeReviewStats(stats, 4), "Mean 3.3 · 4 of 4 organizers scored · 1 veto");
+  assert.equal(summariseScore(stats), "3.3 · 4 scored · 1 veto");
+  assert.equal(summariseScore(reviewStats({ a: { score: 1 }, b: { score: 1 } })),
+    "1.0 · 2 scored · 2 vetoes");
 });
 
 test("reviewerList prefers a real name, then an email, then the uid", () => {
@@ -94,8 +121,8 @@ const annotated = [
 ];
 
 const reviewsById = new Map([
-  ["alice", { reviews: { boss: { score: 9 }, olivia: { score: 8, note: "clear and novel" } } }],
-  ["bob", { reviews: { boss: { score: 4 } } }],
+  ["alice", { reviews: { boss: { score: 4 }, olivia: { score: 3, note: "clear and novel" } } }],
+  ["bob", { reviews: { boss: { score: 1 } } }],
 ]);
 
 test("reviewScoreMatrix gives every organizer an anonymous score and comment column", () => {
@@ -103,7 +130,7 @@ test("reviewScoreMatrix gives every organizer an anonymous score and comment col
   assert.deepEqual(columns.map((c) => c.label), [
     "Title", "Topic", "Status", "Presentation", "Submitted by",
     "Reviewer 1 score", "Reviewer 1 comment", "Reviewer 2 score", "Reviewer 2 comment",
-    "Mean", "Scores",
+    "Mean", "Scores", "Vetoes",
   ]);
 });
 
@@ -123,11 +150,13 @@ test("reviewScoreMatrix puts each organizer's comment beside their score", () =>
 
 test("reviewScoreMatrix leaves a reviewer's cell blank when they have not scored", () => {
   const { rows } = reviewScoreMatrix(annotated, { reviewsById, reviewers });
-  assert.equal(rows[0]["r:boss"], 9);
-  assert.equal(rows[0]["r:olivia"], 8);
-  assert.equal(rows[0].mean, 8.5);
+  assert.equal(rows[0]["r:boss"], 4);
+  assert.equal(rows[0]["r:olivia"], 3);
+  assert.equal(rows[0].mean, 3.5);
+  assert.equal(rows[0].vetoes, 0);
   assert.equal(rows[1]["r:olivia"], "", "Olivia has not scored this one");
   assert.equal(rows[1].count, 1);
+  assert.equal(rows[1].vetoes, 1);
 });
 
 test("an organizer who has scored nothing still gets a column", () => {
@@ -151,13 +180,13 @@ test("the matrix feeds toCsv unchanged", () => {
   const csv = toCsv(rows, columns);
   const [header, first] = csv.trim().split("\r\n");
   assert.equal(header, "Title,Topic,Status,Presentation,Submitted by,"
-    + "Reviewer 1 score,Reviewer 1 comment,Reviewer 2 score,Reviewer 2 comment,Mean,Scores");
-  assert.equal(first, "Recurrent dynamics,systems,accepted,talk,Alice Dupont,9,,8,clear and novel,8.5,2");
+    + "Reviewer 1 score,Reviewer 1 comment,Reviewer 2 score,Reviewer 2 comment,Mean,Scores,Vetoes");
+  assert.equal(first, "Recurrent dynamics,systems,accepted,talk,Alice Dupont,4,,3,clear and novel,3.5,2,0");
 });
 
 test("summariseScore fits the mean and the count into a list row", () => {
-  assert.equal(summariseScore({ mean: 7.3, count: 3 }), "7.3 · 3 scored");
-  assert.equal(summariseScore({ mean: 9, count: 1 }), "9.0 · 1 scored");
+  assert.equal(summariseScore({ mean: 2.3, count: 3 }), "2.3 · 3 scored");
+  assert.equal(summariseScore({ mean: 4, count: 1 }), "4.0 · 1 scored");
 });
 
 test("summariseScore says so when nobody has scored", () => {
@@ -167,9 +196,9 @@ test("summariseScore says so when nobody has scored", () => {
 });
 
 test("summariseScore takes reviewStats output directly", () => {
-  const stats = reviewStats({ a: { score: 8 }, b: { score: 7 }, c: { note: "no number" } });
+  const stats = reviewStats({ a: { score: 4 }, b: { score: 3 }, c: { note: "no number" } });
   // Three organizers said something, two put a number on it.
-  assert.equal(summariseScore(stats), "7.5 · 2 scored");
+  assert.equal(summariseScore(stats), "3.5 · 2 scored");
 });
 
 const scored = (pairs) => new Map(Object.entries(pairs).map(([id, scores]) => [
@@ -179,13 +208,13 @@ const scored = (pairs) => new Map(Object.entries(pairs).map(([id, scores]) => [
 
 test("sortByMeanScore puts the best first", () => {
   const list = [{ id: "a", title: "A" }, { id: "b", title: "B" }, { id: "c", title: "C" }];
-  const reviewsById = scored({ a: [5, 5], b: [9, 8], c: [7] });
+  const reviewsById = scored({ a: [2, 2], b: [4, 3], c: [3] });
   assert.deepEqual(sortByMeanScore(list, { reviewsById }).map((x) => x.id), ["b", "c", "a"]);
 });
 
 test("sortByMeanScore reverses on request", () => {
   const list = [{ id: "a", title: "A" }, { id: "b", title: "B" }, { id: "c", title: "C" }];
-  const reviewsById = scored({ a: [5, 5], b: [9, 8], c: [7] });
+  const reviewsById = scored({ a: [2, 2], b: [4, 3], c: [3] });
   assert.deepEqual(
     sortByMeanScore(list, { reviewsById, direction: "asc" }).map((x) => x.id),
     ["a", "c", "b"]);
@@ -196,7 +225,7 @@ test("sortByMeanScore keeps unscored abstracts last in BOTH directions", () => {
   // abstract under everything nobody has looked at yet.
   const list = [{ id: "none", title: "Unscored" }, { id: "low", title: "Low" },
     { id: "high", title: "High" }];
-  const reviewsById = scored({ low: [2], high: [9] });
+  const reviewsById = scored({ low: [2], high: [4] });
   assert.deepEqual(sortByMeanScore(list, { reviewsById }).map((x) => x.id),
     ["high", "low", "none"]);
   assert.deepEqual(sortByMeanScore(list, { reviewsById, direction: "asc" }).map((x) => x.id),
@@ -205,7 +234,7 @@ test("sortByMeanScore keeps unscored abstracts last in BOTH directions", () => {
 
 test("sortByMeanScore breaks ties on title, so renders are stable", () => {
   const list = [{ id: "b", title: "Beta" }, { id: "a", title: "Alpha" }];
-  const reviewsById = scored({ a: [7], b: [7] });
+  const reviewsById = scored({ a: [3], b: [3] });
   assert.deepEqual(sortByMeanScore(list, { reviewsById }).map((x) => x.id), ["a", "b"]);
   // Unscored ties too.
   assert.deepEqual(sortByMeanScore(list, { reviewsById: new Map() }).map((x) => x.id),
@@ -249,7 +278,7 @@ test("reviewerLabels numbers organizers by uid, not by name", () => {
 
 test("reviewerLabels numbers a former organizer's review after the current ones", () => {
   const labels = reviewerLabels(reviewers, new Map([
-    ["x", { reviews: { aaron: { score: 3 }, boss: { score: 5 } } }],
+    ["x", { reviews: { aaron: { score: 3 }, boss: { score: 2 } } }],
   ]));
   assert.deepEqual([...labels], [
     ["boss", "Reviewer 1"], ["olivia", "Reviewer 2"], ["aaron", "Reviewer 3"],
@@ -257,21 +286,23 @@ test("reviewerLabels numbers a former organizer's review after the current ones"
 });
 
 test("myScore and myScoreSummary read only the one organizer's slot", () => {
-  const reviews = { boss: { score: 9 }, olivia: { note: "no number" } };
-  assert.equal(myScore(reviews, "boss"), 9);
+  const reviews = { boss: { score: 3 }, olivia: { note: "no number" }, kai: { score: 7 } };
+  assert.equal(myScore(reviews, "boss"), 3);
   assert.equal(myScore(reviews, "olivia"), null);
+  assert.equal(myScore(reviews, "kai"), null, "an old ten-point score is not a score");
   assert.equal(myScore(undefined, "boss"), null);
-  assert.equal(myScoreSummary(reviews, "boss"), "your score 9");
+  assert.equal(myScoreSummary(reviews, "boss"), "your score 3 (good)");
+  assert.equal(myScoreSummary(reviews, "kai"), "not scored by you");
   assert.equal(myScoreSummary(reviews, "olivia"), "not scored by you");
 });
 
 test("sortByMeanScore with a uid sorts by that organizer's score, not the mean", () => {
   const list = [{ id: "a", title: "A" }, { id: "b", title: "B" }, { id: "c", title: "C" }];
   const byId = new Map([
-    // The mean puts "a" first (8.5 vs 6); boss's own scores put "b" first.
-    ["a", { reviews: { boss: { score: 7 }, olivia: { score: 10 } } }],
-    ["b", { reviews: { boss: { score: 9 }, olivia: { score: 3 } } }],
-    ["c", { reviews: { olivia: { score: 10 } } }],
+    // The mean puts "a" above "b" (3 vs 2); boss's own scores put "b" first.
+    ["a", { reviews: { boss: { score: 2 }, olivia: { score: 4 } } }],
+    ["b", { reviews: { boss: { score: 3 }, olivia: { score: 1 } } }],
+    ["c", { reviews: { olivia: { score: 4 } } }],
   ]);
   assert.deepEqual(sortByMeanScore(list, { reviewsById: byId }).map((a) => a.id), ["c", "a", "b"]);
   assert.deepEqual(
@@ -284,7 +315,7 @@ test("sortByMeanScore with a uid sorts by that organizer's score, not the mean",
 
 test("countReviewNotes counts every non-blank comment, legacy ones included", () => {
   assert.deepEqual(countReviewNotes(new Map([
-    ["a", { reviews: { boss: { score: 7, note: "fine" }, olivia: { note: "  " } } }],
+    ["a", { reviews: { boss: { score: 3, note: "fine" }, olivia: { note: "  " } } }],
     ["b", { note: "old shared note", reviews: { boss: { note: "weak" } } }],
     ["c", { reviews: { boss: { score: 4 } } }],
   ])), { notes: 3, abstracts: 2 });
