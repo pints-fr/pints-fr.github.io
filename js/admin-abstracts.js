@@ -675,6 +675,12 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
       say(`Deleted “${abstract.title}”.`, "warn");
     });
 
+    // Reviewer mode is for scoring, not deciding: no accepting, rejecting or
+    // deleting while the committee is still reading.
+    accept.hidden = blind;
+    reject.hidden = blind;
+    remove.hidden = blind;
+
     actions.append(typeSelect, posterInput, accept, reject, edit, pull, remove);
 
     // The editor is mounted into the card it belongs to, in the same panel the
