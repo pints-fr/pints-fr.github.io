@@ -11,7 +11,7 @@ import {
   blindExportRows, stripAuthors,
 } from "./abstract-export-utils.mjs";
 import {
-  countReviewNotes, describeReviewStats, myScoreSummary, reviewScoreMatrix, reviewStats,
+  describeReviewStats, myScoreSummary, reviewScoreMatrix, reviewStats,
   reviewerLabels, reviewerList, SCORE_LABELS, isRetiredScore, isScore, scoreLabel,
   scoreOptions, sortByMeanScore, sortByTitle, summariseScore,
 } from "./review-utils.mjs";
@@ -23,7 +23,6 @@ import { deleteAbstractCompletely } from "./functions.js";
 import { toCsv } from "./csv-utils.mjs";
 import { download } from "./download.js";
 import {
-  clearAllReviewNotes,
   getSiteConfig,
   listAbstracts,
   listAdmins,
@@ -300,56 +299,11 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
       download("pints-reviewer-scores-comments.csv", toCsv(rows, columns));
     });
 
-    const clearBtn = document.createElement("button");
-    clearBtn.className = "danger";
-    clearBtn.id = "adm-clear-notes";
-    clearBtn.textContent = "Delete all review comments";
-    clearBtn.title = "Remove every organizer's comment on every abstract. Scores are kept.";
-    clearBtn.addEventListener("click", async () => {
-      clearBtn.disabled = true;
-      try {
-        await clearNotes();
-      } catch (err) {
-        say("Could not delete the review comments.", "err");
-        console.error("[pints] clearAllReviewNotes", err);
-      } finally {
-        clearBtn.disabled = false;
-      }
-    });
-
     const note = document.createElement("span");
     note.className = "muted";
     note.id = "adm-export-note";
 
-    bar.append(toggleAll, abstractsBtn, scoresBtn, clearBtn, note);
-  }
-
-  /**
-   * Every comment by every organizer on every abstract — not just the ones the
-   * filters show, which is why the confirmation names the total. Counted from a
-   * fresh read, so the number promised is the number deleted.
-   */
-  async function clearNotes() {
-    const { notes, abstracts } = countReviewNotes(await listReviews());
-    if (!notes) {
-      say("There are no review comments to delete.", "ok");
-      return;
-    }
-    const choice = await confirmChoice({
-      title: "Delete all review comments",
-      message: `Delete ${notes} review comment${notes === 1 ? "" : "s"} on ${abstracts} `
-        + `abstract${abstracts === 1 ? "" : "s"}, written by every organizer? `
-        + "Scores are kept. This cannot be undone.",
-      choices: [
-        { value: "delete", label: "Delete all comments", className: "danger" },
-        { value: "cancel", label: "Cancel", className: "secondary" },
-      ],
-    });
-    if (choice !== "delete") return;
-    const result = await clearAllReviewNotes();
-    say(`Deleted ${result.notes} review comment${result.notes === 1 ? "" : "s"}. `
-      + "Scores are unchanged.", "warn");
-    await render();
+    bar.append(toggleAll, abstractsBtn, scoresBtn, note);
   }
 
   /**
