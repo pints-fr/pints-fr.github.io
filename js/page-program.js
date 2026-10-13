@@ -38,6 +38,12 @@ function itemRow(item) {
     link.textContent = "see abstracts";
     what.append(" — ", link);
   }
+  if (item.kind === "social") {
+    const link = document.createElement("a");
+    link.href = "party.html";
+    link.textContent = "details";
+    what.append(" — ", link);
+  }
 
   const who = document.createElement("td");
   who.textContent = [item.speaker, item.affiliation].filter(Boolean).join(" — ");

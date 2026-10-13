@@ -7,10 +7,11 @@ import {
 // The shared instance, not a second getStorage(app): only that one has been
 // pointed at the emulator when a page asks for it.
 import { storage } from "./firebase.js";
-import { ARCHIVE, FIGURE, HERO } from "./config.mjs";
+import { ARCHIVE, FIGURE, HERO, PAGE_IMAGE } from "./config.mjs";
 import { figurePath, outputType, targetSize } from "./figure-utils.mjs";
 import { heroPath } from "./hero-utils.mjs";
 import { archivePath } from "./album-utils.mjs";
+import { pageImagePath } from "./page-image-utils.mjs";
 
 export { storage };
 
@@ -82,6 +83,21 @@ export async function uploadHeroPhoto(uid, id, file) {
 export async function uploadArchivePhoto(uid, id, file) {
   const path = archivePath(uid, id);
   const blob = await downscale(file, ARCHIVE.maxEdge);
+  const objectRef = ref(storage, path);
+  await uploadBytes(objectRef, blob, { contentType: blob.type || outputType(file.type) });
+  return { url: await getDownloadURL(objectRef), path };
+}
+
+/**
+ * Upload one image for page copy (the Pages tab). -> { url, path }.
+ *
+ * Same shape as uploadArchivePhoto, under its own prefix. Nothing deletes these
+ * later: the only reference to one is a markdown link inside a page, and an
+ * image an organizer cut from the copy is a few hundred KB nobody pays for.
+ */
+export async function uploadPageImage(uid, id, file) {
+  const path = pageImagePath(uid, id);
+  const blob = await downscale(file, PAGE_IMAGE.maxEdge);
   const objectRef = ref(storage, path);
   await uploadBytes(objectRef, blob, { contentType: blob.type || outputType(file.type) });
   return { url: await getDownloadURL(objectRef), path };

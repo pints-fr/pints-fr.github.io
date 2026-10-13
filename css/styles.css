@@ -46,6 +46,14 @@ body {
 .speaker-photo { width: 4rem; height: 4rem; border-radius: 50%; object-fit: cover; flex: 0 0 auto; }
 .speaker-grid { display: flex; flex-wrap: wrap; gap: 0 2rem; }
 .speaker a { color: var(--ink); }
+/* Photographs side by side in page copy: wrap images in <div class="photo-row">
+   in the Pages editor. Markdown puts consecutive images in one <p>, blank-line
+   separated ones in several, so the paragraphs step aside (display: contents)
+   and the images themselves are the grid items either way. Two to a row on a
+   wide screen, one on a phone. */
+.photo-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: .75rem; margin: 0 0 1.5rem; }
+.photo-row > p { display: contents; }
+.photo-row img { display: block; width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: var(--radius); }
 /* Markdown cannot attach a class, so any image embedded in content/*.md needs a
    global guard — without this a wide logo overflows .prose and makes the whole
    page scroll sideways. */

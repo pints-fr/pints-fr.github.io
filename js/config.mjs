@@ -25,6 +25,7 @@ export const EVENT = {
 export const NAV = [
   { href: "index.html", label: "Home" },
   { href: "program.html", label: "Program" },
+  { href: "party.html", label: "Party" },
   { href: "abstracts.html", label: "Abstracts" },
   { href: "participants.html", label: "Participants" },
   { href: "venue.html", label: "Venue" },
@@ -138,6 +139,15 @@ export const ARCHIVE = {
   intervalMs: 7000,
 };
 
+// Images uploaded from the Pages tab into page copy (the party photographs, for
+// instance). maxEdge matches HERO's and ARCHIVE's: a photograph in a .photo-row
+// can span the whole prose column, which is as wide as either of those gets.
+export const PAGE_IMAGE = {
+  maxBytes: 5 * 1024 * 1024,
+  maxEdge: 1800,
+  types: ["image/png", "image/jpeg", "image/webp"],
+};
+
 /**
  * Editable pages. `file` is the copy committed to the repo, which is both the
  * seed for a page that has never been edited on the site and the fallback when
@@ -147,6 +157,7 @@ export const PAGES = [
   { slug: "home", label: "Home", file: "content/home.md" },
   { slug: "about", label: "About", file: "content/about.md" },
   { slug: "venue", label: "Venue", file: "content/venue.md" },
+  { slug: "party", label: "Party", file: "content/party.md" },
   { slug: "previous-editions", label: "Archive", file: "content/previous-editions.md" },
   { slug: "poster-guidelines", label: "Poster guidelines", file: "content/poster-guidelines.md" },
 ];

@@ -1,6 +1,9 @@
-import { LIMITS, PAGES } from "./config.mjs";
+import { LIMITS, PAGE_IMAGE, PAGES } from "./config.mjs";
 import { renderPageHtml } from "./markdown.js";
 import { getPage, savePage } from "./db.js";
+import { uploadPageImage } from "./storage.js";
+import { validateFigure } from "./figure-utils.mjs";
+import { imageMarkdown, pageImageId } from "./page-image-utils.mjs";
 
 /**
  * Edit page copy from the site.
@@ -27,9 +30,16 @@ export async function mountPagesTab(host, { adminUid }) {
         to centre a block. Inside a <code>&lt;div&gt;</code>, leave a blank line above
         and below your text or markdown stops working there. The preview below
         shows exactly what the page will do.
+        <strong>Insert image</strong> uploads a photograph and puts its markdown at the
+        cursor; wrap several in <code>&lt;div class="photo-row"&gt;…&lt;/div&gt;</code>
+        to set them side by side.
         Saving publishes immediately — there is no commit and no review.
         <span id="pg-count"></span></span>
     </label>
+    <div class="actions">
+      <button type="button" id="pg-image" class="secondary">Insert image…</button>
+      <input type="file" id="pg-image-file" accept="${PAGE_IMAGE.types.join(",")}" hidden>
+    </div>
     <textarea id="pg-text" rows="20" style="min-height:24rem"></textarea>
 
     <h3>Preview</h3>
@@ -46,6 +56,8 @@ export async function mountPagesTab(host, { adminUid }) {
   const preview = host.querySelector("#pg-preview");
   const count = host.querySelector("#pg-count");
   const saveBtn = host.querySelector("#pg-save");
+  const imageBtn = host.querySelector("#pg-image");
+  const imageFile = host.querySelector("#pg-image-file");
 
   const say = (text_, kind = "ok") => {
     msg.className = `msg ${kind}`;
@@ -93,6 +105,35 @@ export async function mountPagesTab(host, { adminUid }) {
   }
 
   select.addEventListener("change", load);
+
+  // Uploads straight to Storage but only edits the textarea: like any other
+  // edit, the image reaches the public page on "Save and publish".
+  imageBtn.addEventListener("click", () => imageFile.click());
+  imageFile.addEventListener("change", async () => {
+    const file = imageFile.files?.[0];
+    imageFile.value = "";
+    if (!file) return;
+    const { valid } = validateFigure({ type: file.type, size: file.size }, PAGE_IMAGE);
+    if (!valid) {
+      const mb = Math.round(PAGE_IMAGE.maxBytes / (1024 * 1024));
+      return say(`${file.name} must be a PNG, JPEG, or WebP image under ${mb} MB.`, "err");
+    }
+    imageBtn.disabled = true;
+    say(`Uploading ${file.name}…`, "ok");
+    try {
+      const { url } = await uploadPageImage(adminUid, pageImageId(), file);
+      const alt = file.name.replace(/\.[^.]+$/, "");
+      text.focus();
+      text.setRangeText(`\n${imageMarkdown(alt, url)}\n`, text.selectionStart, text.selectionEnd, "end");
+      refreshPreview();
+      say("Image inserted. Edit its description in the brackets, then save to publish.", "ok");
+    } catch (err) {
+      say("Could not upload the image.", "err");
+      console.error("[pints] uploadPageImage", err);
+    } finally {
+      imageBtn.disabled = false;
+    }
+  });
 
   saveBtn.addEventListener("click", async () => {
     const page = current();

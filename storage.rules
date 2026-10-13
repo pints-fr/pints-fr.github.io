@@ -1,13 +1,14 @@
 rules_version = '2';
 
-// Three things live in the bucket: figures attached to abstracts, the
-// photographs behind the home page hero, and the archive albums.
+// Four things live in the bucket: figures attached to abstracts, the
+// photographs behind the home page hero, the archive albums, and images in
+// page copy.
 //
 // Storage rules cannot read Firestore, so ownership has to be encoded in the
 // object path — hence abstract_figures/{uid}/{abstractId}, not a flat namespace
 // keyed by abstract id alone. js/figure-utils.mjs figurePath(),
-// js/hero-utils.mjs heroPath() and js/album-utils.mjs archivePath() are the
-// single places that build them.
+// js/hero-utils.mjs heroPath(), js/album-utils.mjs archivePath() and
+// js/page-image-utils.mjs pageImagePath() are the single places that build them.
 
 service firebase.storage {
   match /b/{bucket}/o {
@@ -67,6 +68,25 @@ service firebase.storage {
       allow read: if true;
 
       // Same ceiling as a figure. The client downscales to ARCHIVE.maxEdge
+      // first, so a real upload lands far under it.
+      allow write: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(png|jpeg|webp)');
+
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Images in page copy, uploaded from the admin console's Pages tab.
+    //
+    // Same reasoning as hero/ on why the uid is the only check available here:
+    // an upload alone shows nowhere. Putting an image on a public page needs a
+    // write to pages/{slug}, which firestore.rules gates on isAdmin().
+    match /page_images/{uid}/{fileName} {
+      // Page copy is public, so its images are.
+      allow read: if true;
+
+      // Same ceiling as a figure. The client downscales to PAGE_IMAGE.maxEdge
       // first, so a real upload lands far under it.
       allow write: if request.auth != null
         && request.auth.uid == uid
