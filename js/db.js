@@ -332,6 +332,34 @@ export async function clearAllReviewNotes() {
   return { notes, abstracts: updates.length };
 }
 
+/**
+ * Confirm a participant's publish setting without opening the editor — the
+ * "Publish title and authors only" shortcut on their submission card.
+ *
+ * Only the two setting fields change, so the status is left exactly as it is,
+ * which is what the owner update rule asks of a write outside the submission
+ * window. An accepted abstract's public copy is rewritten in the same batch,
+ * from `published`'s type, board number and acceptance date, because the rules
+ * refuse to let the two copies disagree.
+ */
+export async function confirmPublishSetting(
+  abstract, choice, { published = null, editClosed = false } = {},
+) {
+  const setting = { publishChoice: choice, publishConfirmed: true };
+  const batch = writeBatch(db);
+  batch.update(doc(db, "abstracts", abstract.id), { ...setting, updatedAt: serverTimestamp() });
+  if (published) {
+    batch.set(doc(db, "abstracts_public", abstract.id),
+      publicAbstract({ ...abstract, ...setting }, {
+        type: published.type,
+        posterNumber: published.posterNumber ?? null,
+        acceptedAt: published.acceptedAt ?? null,
+        editClosed,
+      }));
+  }
+  await batch.commit();
+}
+
 /** Record who accepted or rejected an abstract, without touching anyone's review. */
 export const recordDecision = (abstractId, decidedBy) =>
   setDoc(doc(db, "abstract_reviews", abstractId), {

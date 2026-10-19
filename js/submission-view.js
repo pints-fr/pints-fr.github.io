@@ -1,4 +1,4 @@
-import { getPublicAbstract } from "./db.js";
+import { confirmPublishSetting, getPublicAbstract } from "./db.js";
 import { ownerCan, submissionStatusLabel } from "./abstract-utils.mjs";
 import { abstractCard, abstractPermalink } from "./abstract-card.js";
 
@@ -25,10 +25,13 @@ import { abstractCard, abstractPermalink } from "./abstract-card.js";
  *
  * `windows` is submissionWindows() of the site config. What the buttons offer
  * comes from ownerCan(), the client half of the owner rules in firestore.rules.
+ *
+ * "Publish title and authors only" is a shortcut for the publish setting in the
+ * editor. It saves on the spot and redraws this card, so it needs nothing from
+ * the caller. It is hidden once that is already the confirmed setting.
  */
-export async function mountSubmissionCard(
-  host, abstract, { onEdit, onRetract = null, windows = null },
-) {
+export async function mountSubmissionCard(host, abstract, options) {
+  const { onEdit, onRetract = null, windows = null } = options;
   // The poster/talk decision and the board number live only on the public copy,
   // so a decided abstract costs one extra read and an undecided one costs none.
   const published = abstract.status === "accepted"
@@ -60,6 +63,38 @@ export async function mountSubmissionCard(
   edit.addEventListener("click", () => onEdit());
   actions.append(edit);
 
+  const titleOnly = abstract.publishConfirmed === true && abstract.publishChoice === "titleOnly";
+  const shortcutMsg = document.createElement("p");
+  shortcutMsg.className = "msg";
+  shortcutMsg.setAttribute("role", "status");
+  if (!titleOnly) {
+    const shortcut = document.createElement("button");
+    shortcut.type = "button";
+    shortcut.className = "secondary";
+    shortcut.textContent = "Publish title and authors only";
+    shortcut.title = "Keep your abstract text off the public list. The figure is never public.";
+    shortcut.disabled = !can.edit;
+    shortcut.addEventListener("click", async () => {
+      if (!confirm("Publish only the title and authors of your abstract? The abstract text "
+        + "will not appear on the public list. You can change this from Edit submission "
+        + "while editing is open.")) return;
+      shortcut.disabled = true;
+      try {
+        await confirmPublishSetting(abstract, "titleOnly", {
+          published, editClosed: !windows?.editOpen,
+        });
+        await mountSubmissionCard(host,
+          { ...abstract, publishChoice: "titleOnly", publishConfirmed: true }, options);
+      } catch (err) {
+        shortcutMsg.className = "msg err";
+        shortcutMsg.textContent = "Could not save your publish setting. Please try again.";
+        console.error("[pints] confirmPublishSetting", err);
+        shortcut.disabled = false;
+      }
+    });
+    actions.append(shortcut);
+  }
+
   if (onRetract) {
     const retract = document.createElement("button");
     retract.type = "button";
@@ -73,7 +108,7 @@ export async function mountSubmissionCard(
   const note = document.createElement("p");
   note.className = "hint";
   note.textContent = actionNote(abstract, published, windows, can);
-  card.append(actions);
+  card.append(actions, shortcutMsg);
   if (note.textContent) card.append(note);
   host.replaceChildren(card);
   return card;

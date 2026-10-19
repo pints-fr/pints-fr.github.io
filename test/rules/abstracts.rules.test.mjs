@@ -635,3 +635,34 @@ test("nobody else can rewrite or delete somebody's public copy", async () => {
     publicCopy(abstract({ status: "accepted" }))));
   await assertFails(deleteDoc(doc(fs, "abstracts_public", "alice")));
 });
+
+// ------------------------------------- the "title and authors only" shortcut
+//
+// What confirmPublishSetting() writes: the two setting fields and updatedAt,
+// as a partial update, plus the public copy when the abstract is accepted.
+
+const shortcut = { publishChoice: "titleOnly", publishConfirmed: true, updatedAt: new Date() };
+
+test("the shortcut confirms title-only on an abstract still in review", async () => {
+  await lateConfig();
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract({ status: "rejected" })));
+  await assertSucceeds(updateDoc(doc(asUser(env, "alice"), "abstracts", "alice"), shortcut));
+});
+
+test("the shortcut on an accepted poster rewrites its public copy in the same batch", async () => {
+  await lateConfig();
+  await seedAccepted("poster");
+  const fs = asUser(env, "alice");
+  await assertFails(updateDoc(doc(fs, "abstracts", "alice"), shortcut));
+  const after = abstract({ status: "accepted", publishChoice: "titleOnly", publishConfirmed: true });
+  const batch = writeBatch(fs);
+  batch.update(doc(fs, "abstracts", "alice"), shortcut);
+  batch.set(doc(fs, "abstracts_public", "alice"), publicCopy(after, { mode: "titleOnly" }));
+  await assertSucceeds(batch.commit());
+});
+
+test("the shortcut is refused once editing closes", async () => {
+  await seedConfig(env, { open: true, deadline: PAST, editing: true, editDeadline: PAST });
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
+  await assertFails(updateDoc(doc(asUser(env, "alice"), "abstracts", "alice"), shortcut));
+});
