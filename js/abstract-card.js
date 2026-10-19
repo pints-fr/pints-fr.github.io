@@ -60,7 +60,20 @@ function affiliationsEl(abstract) {
   return affil;
 }
 
+/**
+ * The abstract text, or — on a public copy published without it (see
+ * publicMode() in abstract-utils.mjs) — a line saying why it is missing, so an
+ * empty space does not read as a broken page.
+ */
 function bodyEl(abstract) {
+  if (abstract.publishMode === "titleOnly" || abstract.publishMode === "pending") {
+    const note = document.createElement("p");
+    note.className = "muted";
+    note.textContent = abstract.publishMode === "titleOnly"
+      ? "The authors have chosen to share only the title and authors."
+      : "The abstract will be published here soon.";
+    return note;
+  }
   const body = document.createElement("div");
   // The only innerHTML here, and only through the tight untrusted allowlist.
   body.innerHTML = renderAbstractHtml(abstract.body);

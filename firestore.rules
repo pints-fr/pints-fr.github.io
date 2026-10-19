@@ -44,6 +44,25 @@ service cloud.firestore {
       return cfg.submissionsOpen == true && request.time < cfg.submissionDeadline;
     }
 
+    // The window for changing an abstract that already exists: editing it,
+    // retracting it, choosing how it is published. It is the editing checkbox
+    // and deadline in config/site, OR the submission window — so somebody who
+    // has just submitted can always fix a typo, and a config written before the
+    // editing fields existed behaves exactly as it did. Missing editing fields
+    // mean closed. js/abstract-utils.mjs submissionWindows() reads it the same
+    // way.
+    //
+    // The submission half is guarded rather than called: submissionWindowOpen()
+    // errors on a config with no deadline, and an error here would take the
+    // editing window down with it.
+    function editWindowOpen() {
+      let cfg = get(/databases/$(database)/documents/config/site).data;
+      return (cfg.get('submissionsOpen', false) == true
+              && request.time < cfg.get('submissionDeadline', request.time))
+        || (cfg.get('editingOpen', false) == true
+            && request.time < cfg.get('editingDeadline', request.time));
+    }
+
     // Whether new people may register, from config/site.registrationOpen. Unlike
     // submissionWindowOpen() this fails OPEN: a missing document or a missing
     // field means open, because the switch was added after the site went live
@@ -89,7 +108,8 @@ service cloud.firestore {
     function validAbstract(data, uid) {
       return data.keys().hasOnly(['ownerUid', 'edition', 'title', 'affiliations', 'authors',
                                   'body', 'topic', 'talkConsidered', 'figureUrl', 'figurePath',
-                                  'figureCaption', 'status', 'createdAt', 'updatedAt'])
+                                  'figureCaption', 'publishChoice', 'publishConfirmed',
+                                  'status', 'createdAt', 'updatedAt'])
         && data.keys().hasAll(['ownerUid', 'edition', 'title', 'affiliations', 'authors',
                                'body', 'topic', 'talkConsidered', 'status'])
         && data.ownerUid == uid
@@ -104,9 +124,41 @@ service cloud.firestore {
         // there is no figure, the same way it writes figurePath.
         && (!('figureUrl' in data) || data.figureUrl == null || str(data.figureUrl, 500))
         && optStr(data, 'figureCaption', 600)
+        && (!('publishChoice' in data) || data.publishChoice in ['full', 'titleOnly'])
+        && (!('publishConfirmed' in data) || data.publishConfirmed is bool)
         && (!('figurePath' in data) || data.figurePath == null || str(data.figurePath, 300))
         && data.authors is list && data.authors.size() > 0 && data.authors.size() <= 20
         && data.affiliations is list && data.affiliations.size() <= 10;
+    }
+
+    // How an accepted abstract is shown publicly, as its OWNER must write it.
+    // A confirmed choice is honoured; an unconfirmed one is held back as
+    // 'pending' (title and authors only). The default, 'full', is applied to
+    // unconfirmed abstracts by an organizer after the editing window closes —
+    // an owner can only write while it is open, so for them it never applies.
+    // The owner-side half of js/abstract-utils.mjs publicMode().
+    function expectedMode(priv) {
+      return priv.get('publishConfirmed', false) == true
+        ? priv.get('publishChoice', 'full')
+        : 'pending';
+    }
+
+    // Whether a public copy is exactly what js/db.js publicAbstract() builds
+    // from `priv`. Checked on every owner write that touches an accepted
+    // abstract, from both sides of the batch, so an owner can neither leave
+    // the public copy stale nor put on it anything their abstract does not say.
+    // Never a figure: figures are for organizers and reviewers only.
+    function publicMatches(pub, priv) {
+      let mode = expectedMode(priv);
+      return pub.keys().hasOnly(['title', 'affiliations', 'authors', 'topic', 'body',
+                                 'publishMode', 'type', 'posterNumber', 'edition',
+                                 'acceptedAt'])
+        && pub.title == priv.title
+        && pub.authors == priv.authors
+        && pub.affiliations == priv.affiliations
+        && pub.topic == priv.topic
+        && pub.publishMode == mode
+        && pub.body == (mode == 'full' ? priv.body : null);
     }
 
     // PINTS is a single day in a single venue, so there is no day, no room, and
@@ -287,24 +339,46 @@ service cloud.firestore {
         && validAbstract(request.resource.data, uid)
         && request.resource.data.status == 'submitted';
 
-      // Frozen on acceptance ONLY. An edit after acceptance would leave
-      // abstracts_public stale. A rejected abstract stays editable — with one
-      // slot per person, freezing it would mean a rejected participant could
-      // never revise, delete, or replace their submission.
+      // Changing an abstract after it is in: only inside the editing window
+      // (editWindowOpen() above), which outlives the submission window by as
+      // long as the organizers set. Three shapes, one per kind of abstract:
+      //
+      //  - Still pending, inside the SUBMISSION window: a (re)submission, so
+      //    the status goes back to 'submitted'. A rejected abstract stays
+      //    editable — with one slot per person, freezing it would mean a
+      //    rejected participant could never revise or replace it.
+      //  - Still pending, after the submission window: a correction. The
+      //    status is pinned, so a late edit cannot put a rejected abstract
+      //    back in front of the committee.
+      //  - Accepted, poster or talk: a correction too, status pinned, and the
+      //    public copy must be rewritten in the same batch (publicMatches()
+      //    against getAfter) so the list never serves stale text.
       //
       // 'withdrawn' is a retired status kept here on purpose. Nothing writes it
       // any more (the admin's Withdraw button became Return to review, which
       // writes 'submitted'), but a document from before the change still holds
       // it, and dropping it from this list would freeze that document out of
-      // its owner's hands forever. Only the PREVIOUS status is tolerated; the
-      // line below still pins what may be written.
-      allow update: if isVerified() && submissionWindowOpen()
+      // its owner's hands forever.
+      allow update: if isVerified() && editWindowOpen()
         && isOwner(uid)
-        && resource.data.status in ['submitted', 'rejected', 'withdrawn']
-        && request.resource.data.status == 'submitted'
-        && validAbstract(request.resource.data, uid);
+        && validAbstract(request.resource.data, uid)
+        && ((resource.data.status in ['submitted', 'rejected', 'withdrawn']
+             && (request.resource.data.status == resource.data.status
+                 || (submissionWindowOpen() && request.resource.data.status == 'submitted')))
+            || (resource.data.status == 'accepted'
+                && request.resource.data.status == 'accepted'
+                && exists(/databases/$(database)/documents/abstracts_public/$(uid))
+                && publicMatches(
+                     getAfter(/databases/$(database)/documents/abstracts_public/$(uid)).data,
+                     request.resource.data)));
 
-      allow delete: if isOwner(uid) && resource.data.status != 'accepted';
+      // Retracting, inside the editing window. An accepted POSTER may be
+      // retracted, but only in the batch that takes its public copy down too;
+      // an accepted talk may not, because the programme is built around it.
+      allow delete: if isOwner(uid) && editWindowOpen()
+        && (resource.data.status != 'accepted'
+            || (get(/databases/$(database)/documents/abstracts_public/$(uid)).data.type == 'poster'
+                && !existsAfter(/databases/$(database)/documents/abstracts_public/$(uid))));
 
       allow write: if isAdmin();
     }
@@ -316,9 +390,31 @@ service cloud.firestore {
     }
 
     // Public projection, written by the admin console on acceptance.
+    //
+    // Its owner may rewrite it while the editing window is open, but only as
+    // the other half of a batch that edits the private abstract: the content
+    // must be what publicMatches() derives from that abstract, and the
+    // committee's half — type, board number, acceptance date — cannot move.
+    // They may delete it only when it is a poster, and only in the batch that
+    // retracts the private abstract too.
     match /abstracts_public/{abstractId} {
       allow read: if true;
       allow write: if isAdmin();
+      allow update: if isVerified() && editWindowOpen()
+        && isOwner(abstractId)
+        && request.resource.data.type == resource.data.type
+        && request.resource.data.get('posterNumber', null)
+            == resource.data.get('posterNumber', null)
+        && request.resource.data.get('acceptedAt', null)
+            == resource.data.get('acceptedAt', null)
+        && request.resource.data.edition == resource.data.edition
+        && getAfter(/databases/$(database)/documents/abstracts/$(abstractId))
+            .data.status == 'accepted'
+        && publicMatches(request.resource.data,
+             getAfter(/databases/$(database)/documents/abstracts/$(abstractId)).data);
+      allow delete: if isOwner(abstractId) && editWindowOpen()
+        && resource.data.type == 'poster'
+        && !existsAfter(/databases/$(database)/documents/abstracts/$(abstractId));
     }
 
     // Editable page copy, written from the admin console so organizers do not

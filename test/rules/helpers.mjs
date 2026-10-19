@@ -40,11 +40,20 @@ export function seedAdmin(env, uid) {
 }
 
 /** Open the submission window. Phase 2 rules read this document. */
-export function seedConfig(env, { open = true, deadline = new Date(Date.now() + 30 * 864e5) } = {}) {
+//
+// `editing` and `editDeadline` are the separate editing window; left out, the
+// document has no editing fields at all, which is what every config written
+// before that window existed looks like.
+export function seedConfig(
+  env,
+  { open = true, deadline = new Date(Date.now() + 30 * 864e5), editing, editDeadline } = {},
+) {
   return seed(env, (fs) =>
     setDoc(doc(fs, "config", "site"), {
       submissionsOpen: open,
       submissionDeadline: deadline,
+      ...(editing === undefined ? {} : { editingOpen: editing }),
+      ...(editDeadline === undefined ? {} : { editingDeadline: editDeadline }),
       edition: "pints2026",
     }));
 }

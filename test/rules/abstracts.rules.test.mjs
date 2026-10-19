@@ -2,7 +2,7 @@ import test, { after, before, beforeEach } from "node:test";
 import { assertFails, assertSucceeds } from "@firebase/rules-unit-testing";
 import {
   collection, deleteDoc, deleteField, doc, FieldPath, getDoc, getDocs, query, setDoc, updateDoc,
-  where,
+  where, writeBatch,
 } from "firebase/firestore";
 import { asAnon, asUser, makeTestEnv, seed, seedAdmin, seedConfig } from "./helpers.mjs";
 
@@ -12,6 +12,7 @@ after(async () => { await env.cleanup(); });
 beforeEach(async () => { await env.clearFirestore(); });
 
 const PAST = new Date(Date.now() - 864e5);
+const FUTURE = new Date(Date.now() + 30 * 864e5);
 
 // One abstract per participant, and the document id IS the owner's uid — so
 // every path below is `abstracts/<uid>`, and there is no such thing as a second
@@ -28,6 +29,8 @@ const abstract = (over = {}) => ({
   figureUrl: "https://example.org/f.png",
   figurePath: "abstract_figures/alice/alice",
   figureCaption: "Tuning curves for 120 neurons.",
+  publishChoice: "full",
+  publishConfirmed: false,
   status: "submitted",
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -183,7 +186,9 @@ test("an owner can edit their abstract while it is still submitted", async () =>
     abstract({ title: "A better title" })));
 });
 
-test("an owner CANNOT edit or delete once accepted", async () => {
+test("an owner CANNOT edit or delete an accepted abstract that has no public copy", async () => {
+  // A half-finished acceptance: status flipped, abstracts_public never written.
+  // There is no public copy to keep in step, so there is nothing safe to allow.
   await seedConfig(env);
   await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract({ status: "accepted" })));
   const fs = asUser(env, "alice");
@@ -369,9 +374,9 @@ test("an admin can edit an abstract they do not own", async () => {
   ));
 });
 
-// "Update published copy" writes an already-accepted abstract, which its owner
-// cannot do: the freeze that stops abstracts_public going stale is a rule about
-// owners.
+// "Update published copy" writes an already-accepted abstract. Its owner can
+// only do that in a batch that rewrites the public copy too (see the editing
+// window tests below); an organizer is not held to it.
 test("an admin can write an accepted abstract, which its owner cannot", async () => {
   await seedConfig(env);
   await seedAdmin(env, "olivia");
@@ -419,4 +424,214 @@ test("an admin can delete the published copy and the review", async () => {
   const fs = asUser(env, "olivia");
   await assertSucceeds(deleteDoc(doc(fs, "abstracts_public", "alice")));
   await assertSucceeds(deleteDoc(doc(fs, "abstract_reviews", "alice")));
+});
+
+// ------------------------------------------------------ the editing window
+//
+// Submissions closed, editing still open: the shape the site is in between
+// the submission deadline and the editing deadline.
+
+const lateConfig = () => seedConfig(env, {
+  open: true, deadline: PAST, editing: true, editDeadline: FUTURE,
+});
+
+test("after the submission deadline nobody can submit, even while editing is open", async () => {
+  await lateConfig();
+  await assertFails(setDoc(doc(asUser(env, "alice"), "abstracts", "alice"), abstract()));
+});
+
+test("the submission checkbox alone does not lock edits", async () => {
+  await seedConfig(env, { open: false, deadline: FUTURE, editing: true, editDeadline: FUTURE });
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
+  await assertFails(setDoc(doc(asUser(env, "bob"), "abstracts", "bob"), abstract({ ownerUid: "bob" })));
+  await assertSucceeds(setDoc(doc(asUser(env, "alice"), "abstracts", "alice"),
+    abstract({ title: "Fixed" })));
+});
+
+test("a late edit keeps a submitted abstract submitted", async () => {
+  await lateConfig();
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
+  await assertSucceeds(setDoc(doc(asUser(env, "alice"), "abstracts", "alice"),
+    abstract({ title: "Late fix", publishChoice: "titleOnly", publishConfirmed: true })));
+});
+
+test("a late edit keeps a rejected abstract rejected", async () => {
+  await lateConfig();
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract({ status: "rejected" })));
+  const fs = asUser(env, "alice");
+  await assertSucceeds(setDoc(doc(fs, "abstracts", "alice"),
+    abstract({ status: "rejected", title: "Corrected" })));
+  await assertFails(setDoc(doc(fs, "abstracts", "alice"),
+    abstract({ status: "submitted", title: "Back into review?" })));
+});
+
+test("a late edit still needs a confirmed address", async () => {
+  await lateConfig();
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
+  await assertFails(setDoc(doc(asUser(env, "alice", { verified: false }), "abstracts", "alice"),
+    abstract({ title: "Late fix" })));
+});
+
+test("an owner can retract while editing is open", async () => {
+  await lateConfig();
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
+  await assertSucceeds(deleteDoc(doc(asUser(env, "alice"), "abstracts", "alice")));
+});
+
+test("once editing closes an owner can neither edit nor retract", async () => {
+  await seedConfig(env, { open: true, deadline: PAST, editing: true, editDeadline: PAST });
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
+  const fs = asUser(env, "alice");
+  await assertFails(setDoc(doc(fs, "abstracts", "alice"), abstract({ title: "Too late" })));
+  await assertFails(deleteDoc(doc(fs, "abstracts", "alice")));
+});
+
+test("unticking editing closes it even before its deadline", async () => {
+  await seedConfig(env, { open: true, deadline: PAST, editing: false, editDeadline: FUTURE });
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
+  const fs = asUser(env, "alice");
+  await assertFails(setDoc(doc(fs, "abstracts", "alice"), abstract({ title: "Too late" })));
+  await assertFails(deleteDoc(doc(fs, "abstracts", "alice")));
+});
+
+test("the publish setting fields are checked", async () => {
+  await seedConfig(env);
+  const fs = asUser(env, "alice");
+  await assertFails(setDoc(doc(fs, "abstracts", "alice"), abstract({ publishChoice: "everything" })));
+  await assertFails(setDoc(doc(fs, "abstracts", "alice"), abstract({ publishConfirmed: "yes" })));
+});
+
+// ---------------------------------------------- accepted posters and talks
+
+const ACCEPTED_AT = new Date("2026-11-01T10:00:00Z");
+
+// What js/db.js publicAbstract() writes, for `priv` under `mode`.
+const publicCopy = (priv, { type = "poster", posterNumber = 7, mode = "pending" } = {}) => ({
+  title: priv.title,
+  affiliations: priv.affiliations,
+  authors: priv.authors,
+  topic: priv.topic,
+  body: mode === "full" ? priv.body : null,
+  publishMode: mode,
+  type,
+  posterNumber: type === "poster" ? posterNumber : null,
+  edition: "pints2026",
+  acceptedAt: ACCEPTED_AT,
+});
+
+async function seedAccepted(type = "poster") {
+  const priv = abstract({ status: "accepted" });
+  await seed(env, async (fs) => {
+    await setDoc(doc(fs, "abstracts", "alice"), priv);
+    await setDoc(doc(fs, "abstracts_public", "alice"), publicCopy(priv, { type }));
+  });
+}
+
+/** The owner's save: both copies, one batch, as saveAbstract() does it. */
+function saveBoth(fs, priv, pub) {
+  const batch = writeBatch(fs);
+  batch.set(doc(fs, "abstracts", "alice"), priv);
+  batch.set(doc(fs, "abstracts_public", "alice"), pub);
+  return batch.commit();
+}
+
+for (const type of ["poster", "talk"]) {
+  test(`an accepted ${type} can be edited, with its public copy, while editing is open`, async () => {
+    await lateConfig();
+    await seedAccepted(type);
+    const priv = abstract({ status: "accepted", title: "Corrected title" });
+    await assertSucceeds(saveBoth(asUser(env, "alice"), priv, publicCopy(priv, { type })));
+  });
+}
+
+test("a confirmed publish setting is what the public copy must show", async () => {
+  await lateConfig();
+  await seedAccepted();
+  const fs = asUser(env, "alice");
+  const full = abstract({ status: "accepted", publishChoice: "full", publishConfirmed: true });
+  await assertSucceeds(saveBoth(fs, full, publicCopy(full, { mode: "full" })));
+  const titleOnly = abstract({
+    status: "accepted", publishChoice: "titleOnly", publishConfirmed: true,
+  });
+  // The body cannot ride along on a title-only copy, nor on a pending one.
+  await assertFails(saveBoth(fs, titleOnly, { ...publicCopy(titleOnly, { mode: "titleOnly" }),
+    body: titleOnly.body }));
+  await assertFails(saveBoth(fs, titleOnly, publicCopy(titleOnly, { mode: "full" })));
+  await assertSucceeds(saveBoth(fs, titleOnly, publicCopy(titleOnly, { mode: "titleOnly" })));
+});
+
+test("an owner cannot publish an unconfirmed abstract in full", async () => {
+  await lateConfig();
+  await seedAccepted();
+  const priv = abstract({ status: "accepted" });
+  await assertFails(saveBoth(asUser(env, "alice"), priv, publicCopy(priv, { mode: "full" })));
+});
+
+test("an accepted abstract cannot be edited without rewriting its public copy", async () => {
+  await lateConfig();
+  await seedAccepted();
+  await assertFails(setDoc(doc(asUser(env, "alice"), "abstracts", "alice"),
+    abstract({ status: "accepted", title: "Only the private copy" })));
+});
+
+test("the public copy must say what the abstract says, and no figure", async () => {
+  await lateConfig();
+  await seedAccepted();
+  const fs = asUser(env, "alice");
+  const priv = abstract({ status: "accepted", title: "Corrected title" });
+  await assertFails(saveBoth(fs, priv, { ...publicCopy(priv), title: "Something else" }));
+  await assertFails(saveBoth(fs, priv, { ...publicCopy(priv), figureUrl: priv.figureUrl }));
+});
+
+test("an owner cannot move their own board number or type", async () => {
+  await lateConfig();
+  await seedAccepted();
+  const fs = asUser(env, "alice");
+  const priv = abstract({ status: "accepted" });
+  await assertFails(saveBoth(fs, priv, publicCopy(priv, { posterNumber: 1 })));
+  await assertFails(saveBoth(fs, priv, publicCopy(priv, { type: "talk" })));
+  await assertFails(saveBoth(fs, abstract({ status: "submitted" }), publicCopy(priv)));
+});
+
+test("an accepted poster is retracted together with its public copy", async () => {
+  await lateConfig();
+  await seedAccepted("poster");
+  const fs = asUser(env, "alice");
+  await assertFails(deleteDoc(doc(fs, "abstracts", "alice")));
+  await assertFails(deleteDoc(doc(fs, "abstracts_public", "alice")));
+  const batch = writeBatch(fs);
+  batch.delete(doc(fs, "abstracts", "alice"));
+  batch.delete(doc(fs, "abstracts_public", "alice"));
+  await assertSucceeds(batch.commit());
+});
+
+test("an accepted talk cannot be retracted", async () => {
+  await lateConfig();
+  await seedAccepted("talk");
+  const fs = asUser(env, "alice");
+  const batch = writeBatch(fs);
+  batch.delete(doc(fs, "abstracts", "alice"));
+  batch.delete(doc(fs, "abstracts_public", "alice"));
+  await assertFails(batch.commit());
+});
+
+test("once editing closes an accepted poster is frozen again", async () => {
+  await seedConfig(env, { open: true, deadline: PAST, editing: true, editDeadline: PAST });
+  await seedAccepted("poster");
+  const fs = asUser(env, "alice");
+  const priv = abstract({ status: "accepted", title: "Too late" });
+  await assertFails(saveBoth(fs, priv, publicCopy(priv)));
+  const batch = writeBatch(fs);
+  batch.delete(doc(fs, "abstracts", "alice"));
+  batch.delete(doc(fs, "abstracts_public", "alice"));
+  await assertFails(batch.commit());
+});
+
+test("nobody else can rewrite or delete somebody's public copy", async () => {
+  await lateConfig();
+  await seedAccepted("poster");
+  const fs = asUser(env, "mallory");
+  await assertFails(setDoc(doc(fs, "abstracts_public", "alice"),
+    publicCopy(abstract({ status: "accepted" }))));
+  await assertFails(deleteDoc(doc(fs, "abstracts_public", "alice")));
 });

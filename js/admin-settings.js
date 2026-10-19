@@ -1,7 +1,8 @@
 import {
   addAdmin, createRegistrationLink, deleteRegistrationLink, getSiteConfig,
-  listRegistrationLinks, listUsers, saveSiteConfig,
+  listRegistrationLinks, listUsers, republishAll, saveSiteConfig,
 } from "./db.js";
+import { submissionWindows } from "./abstract-utils.mjs";
 import {
   isRegistrationOpen, LINK_DURATIONS, linkStatus, registrationLinkUrl,
 } from "./registration-utils.mjs";
@@ -58,7 +59,10 @@ export async function mountSettingsTab(host, { adminUid }) {
     <form id="cfg-form" novalidate>
       <div class="checkline">
         <input id="cfg-open" type="checkbox">
-        <label for="cfg-open">Submissions are open</label>
+        <label for="cfg-open">Submissions are open
+          <span class="hint">Controls only NEW abstracts. Editing and retracting one already
+            submitted follow the editing window below.</span>
+        </label>
       </div>
       <label for="cfg-deadline">Deadline
         <span class="hint">Enforced by the security rules as well as the form, so submissions
@@ -67,6 +71,33 @@ export async function mountSettingsTab(host, { adminUid }) {
       <input id="cfg-deadline" type="datetime-local">
       <div class="actions"><button type="submit" id="cfg-save">Save settings</button></div>
     </form>
+
+    <h2>Editing window</h2>
+    <form id="edit-form" novalidate>
+      <div class="checkline">
+        <input id="cfg-edit-open" type="checkbox">
+        <label for="cfg-edit-open">Participants can edit and retract
+          <span class="hint">Until the editing deadline, participants can edit their abstract,
+            retract it (talks excepted), and confirm how it is published — even after
+            submissions close, and even once it is accepted. Edits to an accepted abstract
+            update the public list straight away. Always possible while submissions are
+            open.</span>
+        </label>
+      </div>
+      <label for="cfg-edit-deadline">Editing deadline</label>
+      <input id="cfg-edit-deadline" type="datetime-local">
+      <div class="actions"><button type="submit" id="edit-save">Save editing window</button></div>
+    </form>
+
+    <h3>Publish settings</h3>
+    <p class="muted">Rewrites every accepted abstract on the public list from what its
+      author chose. Until the editing deadline, an abstract whose author has not confirmed
+      shows only its title and authors; run this after the deadline to publish the full
+      abstract for all of them. Run it once now as well, to take figures off the public
+      list.</p>
+    <div class="actions">
+      <button type="button" id="pub-apply" class="secondary">Apply publish settings</button>
+    </div>
 
     <h2>Add an organizer</h2>
     <p class="muted">Find the person's UID under <strong>Authentication → Users</strong> in the
@@ -84,6 +115,8 @@ export async function mountSettingsTab(host, { adminUid }) {
   const regOpenEl = host.querySelector("#reg-open");
   const dateEl = host.querySelector("#cfg-date");
   const deadlineEl = host.querySelector("#cfg-deadline");
+  const editOpenEl = host.querySelector("#cfg-edit-open");
+  const editDeadlineEl = host.querySelector("#cfg-edit-deadline");
   const cfgSave = host.querySelector("#cfg-save");
   const admSave = host.querySelector("#adm-save");
 
@@ -97,12 +130,9 @@ export async function mountSettingsTab(host, { adminUid }) {
     openEl.checked = Boolean(config?.submissionsOpen);
     regOpenEl.checked = isRegistrationOpen(config);
     dateEl.value = config?.eventDate ?? "";
-    const deadline = config?.submissionDeadline?.toDate?.();
-    if (deadline) {
-      // datetime-local wants local wall-clock time, not UTC.
-      const offset = deadline.getTimezoneOffset() * 60000;
-      deadlineEl.value = new Date(deadline.getTime() - offset).toISOString().slice(0, 16);
-    }
+    deadlineEl.value = toLocalInput(config?.submissionDeadline?.toDate?.());
+    editOpenEl.checked = config?.editingOpen === true;
+    editDeadlineEl.value = toLocalInput(config?.editingDeadline?.toDate?.());
   } catch (err) {
     say("Could not load the current settings.", "err");
     console.error("[pints] getSiteConfig", err);
@@ -270,6 +300,46 @@ export async function mountSettingsTab(host, { adminUid }) {
     }
   });
 
+  host.querySelector("#edit-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!editDeadlineEl.value) return say("Set an editing deadline before saving.", "err");
+    const editSave = host.querySelector("#edit-save");
+    editSave.disabled = true;
+    try {
+      await saveSiteConfig({
+        editingOpen: editOpenEl.checked,
+        editingDeadline: new Date(editDeadlineEl.value),
+      });
+      say(editOpenEl.checked
+        ? "Saved. Participants can edit until the editing deadline."
+        : "Saved. Editing is closed.", "ok");
+    } catch (err) {
+      say("Could not save the editing window.", "err");
+      console.error("[pints] saveSiteConfig editing", err);
+    } finally {
+      editSave.disabled = false;
+    }
+  });
+
+  host.querySelector("#pub-apply").addEventListener("click", async (e) => {
+    const button = e.currentTarget;
+    button.disabled = true;
+    try {
+      // Read fresh rather than from the form: what counts is the window as
+      // saved, not as somebody has half-edited it on screen.
+      const { editOpen } = submissionWindows(await getSiteConfig());
+      const count = await republishAll(!editOpen);
+      say(`Rewrote ${count} public ${count === 1 ? "abstract" : "abstracts"}.`
+        + (editOpen ? " Editing is still open, so unconfirmed ones show only the title "
+          + "and authors." : ""), "ok");
+    } catch (err) {
+      say("Could not apply the publish settings.", "err");
+      console.error("[pints] republishAll", err);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   host.querySelector("#adm-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const uid = host.querySelector("#adm-uid").value.trim();
@@ -287,4 +357,11 @@ export async function mountSettingsTab(host, { adminUid }) {
       admSave.disabled = false;
     }
   });
+}
+
+/** A Date as the local wall-clock string a datetime-local input wants, or "". */
+function toLocalInput(date) {
+  if (!date) return "";
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }

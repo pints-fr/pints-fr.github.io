@@ -144,6 +144,8 @@ export function draftFingerprint(draft) {
     String(draft?.body ?? ""),
     draft?.talkConsidered !== false,
     String(draft?.figureCaption ?? "").trim(),
+    draft?.publishChoice === "titleOnly" ? "titleOnly" : "full",
+    draft?.publishConfirmed === true,
   ]);
 }
 
@@ -184,4 +186,104 @@ export function submissionStatusTone(status) {
   if (status === "accepted") return "accepted";
   if (status === "rejected") return "rejected";
   return "review";
+}
+
+// ------------------------------------------- windows and the public listing
+
+/** A Firestore Timestamp, a Date, or nothing, as a Date or null. */
+const asDate = (value) => value?.toDate?.() ?? (value instanceof Date ? value : null);
+
+/**
+ * Which of the two windows in config/site are open.
+ *
+ * `submitOpen` is the original window, the checkbox and its deadline, and it now
+ * governs only CREATING an abstract. A missing deadline counts as no deadline,
+ * as it always has on the client.
+ *
+ * `editOpen` governs editing and retracting an existing abstract, and choosing
+ * how it is published. It is the editing checkbox and deadline OR the
+ * submission window: somebody who submitted five minutes ago can always fix a
+ * typo, and a config written before the editing fields existed behaves exactly
+ * as it did then. Missing editing fields mean closed, never open.
+ *
+ * Mirrors submissionWindowOpen() and editWindowOpen() in firestore.rules, which
+ * are the real boundary; this only decides what the pages offer.
+ */
+export function submissionWindows(config, now = new Date()) {
+  const deadline = asDate(config?.submissionDeadline);
+  const editingDeadline = asDate(config?.editingDeadline);
+  const submitOpen = Boolean(config?.submissionsOpen) && (!deadline || now < deadline);
+  const editingOpen = config?.editingOpen === true
+    && Boolean(editingDeadline) && now < editingDeadline;
+  return {
+    submitOpen,
+    editOpen: submitOpen || editingOpen,
+    deadline,
+    editingDeadline,
+  };
+}
+
+/**
+ * What a participant may do to their own abstract right now.
+ *
+ * Everything hangs on the editing window. Inside it, an abstract still in
+ * review (or rejected) can be edited and retracted; an accepted one can be
+ * edited only when its public copy exists, because every save has to rewrite
+ * that copy too; and a TALK can never be retracted, since the programme is
+ * built around it. Mirrors the owner rules on abstracts/{uid} in
+ * firestore.rules.
+ */
+export function ownerCan(abstract, published, windows) {
+  if (!abstract || !windows?.editOpen) return { edit: false, retract: false };
+  if (abstract.status !== "accepted") return { edit: true, retract: true };
+  if (!published) return { edit: false, retract: false };
+  return { edit: true, retract: published.type === "poster" };
+}
+
+/**
+ * How an accepted abstract appears on the public list.
+ *
+ *   full       title, authors and the abstract text
+ *   titleOnly  title and authors, by the author's confirmed choice
+ *   pending    title and authors, because the author has not confirmed yet
+ *
+ * An unconfirmed choice is held back until the editing window closes, and only
+ * then falls to the default, `full`. Nothing here ever publishes the figure.
+ * firestore.rules expectedMode() is the owner-side half of the same function:
+ * an owner can only write while editing is open, so for them it is never
+ * `full` by default.
+ */
+export function publicMode(abstract, { editClosed = false } = {}) {
+  if (abstract?.publishConfirmed === true) {
+    return abstract.publishChoice === "titleOnly" ? "titleOnly" : "full";
+  }
+  return editClosed ? "full" : "pending";
+}
+
+/**
+ * The content half of an abstracts_public document: what the public may read
+ * of an abstract under `mode`. The figure and its caption are deliberately
+ * absent — they are for the organizers and reviewers only.
+ */
+export function publicFields(abstract, mode) {
+  return {
+    title: abstract?.title ?? "",
+    affiliations: abstract?.affiliations ?? [],
+    authors: abstract?.authors ?? [],
+    topic: abstract?.topic ?? null,
+    body: mode === "full" ? (abstract?.body ?? "") : null,
+    publishMode: mode,
+  };
+}
+
+/**
+ * The confirmation a participant answers before retracting. Shared with the
+ * Retract button on abstracts.html, so both say the same thing — including,
+ * once submissions have closed, that there is no second attempt.
+ */
+export function retractQuestion(abstract, windows) {
+  return `Retract “${abstract?.title ?? "your abstract"}”? `
+    + "If you retract the poster you won’t be able to present it at PINTS. "
+    + (windows?.submitOpen ? "" : "Submissions are closed, so you can’t submit a new one. ")
+    + "This cannot be undone.";
 }

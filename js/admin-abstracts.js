@@ -3,7 +3,7 @@ import {
 } from "./config.mjs";
 import {
   authorLineParts, filterAdminAbstracts, groupByTopic, nextPosterNumber,
-  submissionStatusLabel, summaryAuthorLine,
+  submissionStatusLabel, submissionWindows, summaryAuthorLine,
 } from "./abstract-utils.mjs";
 import { disclosureShell, statusPill } from "./abstract-card.js";
 import {
@@ -147,6 +147,9 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
   // all it does, because any organizer can turn it off with the checkbox above,
   // so the rules have nothing to enforce.
   let blind = false;
+  // Whether the editing window has closed, which is what decides how an
+  // unconfirmed publish setting is published (publicMode() in abstract-utils).
+  let editClosed = false;
   const blindToggle = host.querySelector("#adm-blind-mode");
 
   // Saved straight away rather than behind a Save button: it is one switch, and
@@ -522,6 +525,15 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
       optOut.textContent = "the submitter asked not to be considered for a talk";
       meta.append(optOut);
     }
+    if (abstract.talkConsidered === false) meta.append(" · ");
+    const publishing = document.createElement("span");
+    publishing.className = "muted";
+    publishing.textContent = abstract.publishConfirmed !== true
+      ? "public listing not confirmed"
+      : abstract.publishChoice === "titleOnly"
+        ? "public listing: title and authors only"
+        : "public listing: full abstract";
+    meta.append(publishing);
 
     const body = document.createElement("div");
     // The one innerHTML on this page, through the unit-tested tight allowlist.
@@ -635,6 +647,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
           type: typeSelect.value,
           posterNumber: Number(posterInput.value),
           acceptedAt: abstract.acceptedAt ?? null,
+          editClosed,
         });
         say(`Published “${abstract.title}”.`, "ok");
       });
@@ -778,6 +791,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     ]);
 
     blind = config?.reviewerMode === true;
+    editClosed = !submissionWindows(config).editOpen;
     blindToggle.checked = blind;
     host.querySelector("#adm-blind").hidden = !blind;
     host.querySelector("#adm-search").placeholder = blind

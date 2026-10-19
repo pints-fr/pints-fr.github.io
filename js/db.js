@@ -17,6 +17,7 @@ import {
 import { db, publicDb } from "./firebase.js";
 import { CURRENT_EDITION } from "./config.mjs";
 import { newLinkToken } from "./registration-utils.mjs";
+import { publicFields, publicMode } from "./abstract-utils.mjs";
 
 const snapData = (snap) => ({ id: snap.id, ...snap.data() });
 
@@ -143,16 +144,17 @@ export async function getMyAbstract(uid) {
  * an accepted abstract.
  *
  * `republish` carries the public projection's type and poster number when an
- * organizer edits an already-accepted abstract, so both copies are rewritten in
- * one batch. Without it abstracts_public would keep serving the old text, which
- * is exactly the staleness the acceptance freeze exists to prevent.
+ * already-accepted abstract is edited — by an organizer, or by its owner while
+ * the editing window is open — so both copies are rewritten in one batch.
+ * Without it abstracts_public would keep serving the old text. Its `editClosed`
+ * decides what an unconfirmed publish setting becomes (see publicMode()).
  */
 export async function saveAbstract(
   id,
   ownerUid,
   {
     title, affiliations, authors, body, topic, talkConsidered,
-    figureUrl, figurePath, figureCaption,
+    figureUrl, figurePath, figureCaption, publishChoice, publishConfirmed,
   },
   { status = "submitted", createdAt = null, republish = null } = {},
 ) {
@@ -168,6 +170,8 @@ export async function saveAbstract(
     figureUrl: figureUrl ?? null,
     figurePath: figurePath ?? null,
     figureCaption: (figureCaption ?? "").trim(),
+    publishChoice: publishChoice === "titleOnly" ? "titleOnly" : "full",
+    publishConfirmed: Boolean(publishConfirmed),
     status,
     // Preserved rather than reset: revising a rejected abstract in November did
     // not make it a submission from November.
@@ -187,6 +191,7 @@ export async function saveAbstract(
       type: republish.type,
       posterNumber: republish.posterNumber,
       acceptedAt: republish.acceptedAt,
+      editClosed: republish.editClosed,
     }));
   await batch.commit();
 }
@@ -196,24 +201,34 @@ export async function saveAbstract(
  * write abstracts_public, so an organizer's edit and an acceptance cannot
  * disagree about what the public list holds.
  *
- * `status`, `ownerUid`, `figurePath` and `talkConsidered` are deliberately left
- * out: they are review material, not programme material.
+ * What the public may read comes from publicFields(), under the author's
+ * publish setting: never the figure, and the text only when they chose (or
+ * defaulted to) the full abstract. `status`, `ownerUid` and `talkConsidered`
+ * are review material, not programme material.
+ *
+ * firestore.rules publicMatches() checks an owner's write against this same
+ * shape, so a key added here has to be added there too.
  */
-const publicAbstract = (abstract, { type, posterNumber, acceptedAt = null }) => ({
-  title: abstract.title,
-  affiliations: abstract.affiliations ?? [],
-  authors: abstract.authors ?? [],
-  body: abstract.body,
-  topic: abstract.topic ?? null,
-  figureUrl: abstract.figureUrl ?? null,
-  figureCaption: abstract.figureCaption ?? "",
+const publicAbstract = (abstract, { type, posterNumber, acceptedAt = null, editClosed = false }) => ({
+  ...publicFields(abstract, publicMode(abstract, { editClosed })),
   type,
   posterNumber: type === "poster" ? posterNumber : null,
   edition: CURRENT_EDITION,
   acceptedAt: acceptedAt ?? serverTimestamp(),
 });
 
-export const deleteAbstract = (id) => deleteDoc(doc(db, "abstracts", id));
+/**
+ * A participant retracting their own abstract. One batch, because an accepted
+ * poster has a public copy too, and firestore.rules lets the owner remove the
+ * private document only in the same write that removes the public one — a
+ * retracted poster must not linger on the public list.
+ */
+export async function retractAbstract(id, { published = false } = {}) {
+  const batch = writeBatch(db);
+  batch.delete(doc(db, "abstracts", id));
+  if (published) batch.delete(doc(db, "abstracts_public", id));
+  await batch.commit();
+}
 
 export async function listAbstracts() {
   const q = query(collection(db, "abstracts"), where("edition", "==", CURRENT_EDITION));
@@ -338,12 +353,46 @@ export const setAbstractStatus = (id, status) =>
  * organizer changed a board number, and "when was this accepted" became "when
  * did somebody last touch it".
  */
-export async function publishAbstract(id, abstract, { type, posterNumber, acceptedAt = null }) {
+export async function publishAbstract(
+  id, abstract, { type, posterNumber, acceptedAt = null, editClosed = false },
+) {
   const batch = writeBatch(db);
   batch.update(doc(db, "abstracts", id), { status: "accepted", updatedAt: serverTimestamp() });
   batch.set(doc(db, "abstracts_public", id),
-    publicAbstract(abstract, { type, posterNumber, acceptedAt }));
+    publicAbstract(abstract, { type, posterNumber, acceptedAt, editClosed }));
   await batch.commit();
+}
+
+/**
+ * Rewrite every public copy from its private abstract, keeping each one's type,
+ * board number and acceptance date. Returns how many it rewrote.
+ *
+ * Two jobs. Once the editing window has closed (`editClosed`), it publishes the
+ * default — the full abstract — for everybody who never confirmed a publish
+ * setting, which nothing else would do on its own. And it migrates copies
+ * written before figures were taken off the public list.
+ *
+ * A public copy whose private abstract is gone or no longer accepted is left
+ * alone: deciding what to do with it is a console decision, not a sweep's.
+ */
+export async function republishAll(editClosed) {
+  const [abstracts, published] = await Promise.all([listAbstracts(), listPublicAbstracts()]);
+  const byId = new Map(abstracts.map((a) => [a.id, a]));
+  const batch = writeBatch(db);
+  let count = 0;
+  for (const pub of published) {
+    const abstract = byId.get(pub.id);
+    if (abstract?.status !== "accepted") continue;
+    batch.set(doc(db, "abstracts_public", pub.id), publicAbstract(abstract, {
+      type: pub.type,
+      posterNumber: pub.posterNumber ?? null,
+      acceptedAt: pub.acceptedAt ?? null,
+      editClosed,
+    }));
+    count += 1;
+  }
+  if (count) await batch.commit();
+  return count;
 }
 
 /**

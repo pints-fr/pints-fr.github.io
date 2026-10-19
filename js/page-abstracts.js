@@ -1,8 +1,12 @@
 import { mountLayout, setAuthLink } from "./layout.js";
 import { warnIfUnconfigured } from "./firebase.js";
 import { onUser } from "./auth.js";
-import { deleteAbstract, getMyAbstract, getPublicAbstract, listPublicAbstracts } from "./db.js";
-import { filterAbstracts, groupByTopic, sortPublicAbstracts } from "./abstract-utils.mjs";
+import {
+  getMyAbstract, getPublicAbstract, getSiteConfig, listPublicAbstracts, retractAbstract,
+} from "./db.js";
+import {
+  filterAbstracts, groupByTopic, retractQuestion, sortPublicAbstracts, submissionWindows,
+} from "./abstract-utils.mjs";
 import { abstractCard, abstractDisclosure, abstractPermalink } from "./abstract-card.js";
 import { mountSubmissionCard } from "./submission-view.js";
 import { deleteFigure } from "./storage.js";
@@ -38,20 +42,28 @@ async function renderSubmitPanel(user) {
   const token = ++submitPanelToken;
   submitCta.href = user ? "submit.html" : withNext("login.html", "submit.html");
 
-  const mine = user
-    ? await getMyAbstract(user.uid).catch((err) => {
-      console.error("[pints] getMyAbstract", err);
-      return null;
-    })
-    : null;
+  const [mine, config] = user
+    ? await Promise.all([
+      getMyAbstract(user.uid).catch((err) => {
+        console.error("[pints] getMyAbstract", err);
+        return null;
+      }),
+      getSiteConfig().catch((err) => {
+        console.error("[pints] getSiteConfig", err);
+        return null;
+      }),
+    ])
+    : [null, null];
 
   if (token !== submitPanelToken) return; // superseded by a later auth state
 
   if (mine) {
     submitCtaBlockEl.hidden = true;
+    const windows = submissionWindows(config);
     await mountSubmissionCard(myAbstractEl, mine, {
+      windows,
       onEdit: () => { location.href = "submit.html?edit=1"; },
-      onDelete: () => deleteMyAbstract(user, mine),
+      onRetract: () => retractMyAbstract(user, mine, windows),
     });
   } else {
     submitCtaBlockEl.hidden = false;
@@ -59,19 +71,28 @@ async function renderSubmitPanel(user) {
   }
 }
 
-/** Delete the signed-in visitor's own abstract, then fall back to the CTA. */
-async function deleteMyAbstract(user, mine) {
-  if (!confirm(`Delete “${mine.title ?? "your abstract"}”? This cannot be undone.`)) return;
+/**
+ * Retract the signed-in visitor's own abstract, then fall back to the CTA. An
+ * accepted poster takes its public copy down in the same batch; the page is
+ * then reloaded, because the list below still holds it.
+ */
+async function retractMyAbstract(user, mine, windows) {
+  if (!confirm(retractQuestion(mine, windows))) return;
   try {
-    await deleteAbstract(mine.id);
+    const published = mine.status === "accepted";
+    await retractAbstract(mine.id, { published });
     // Best-effort: an orphaned figure is invisible and costs nothing, whereas
     // failing the delete over it would leave the abstract in place.
     await deleteFigure(mine.figurePath).catch((err) => console.error("[pints] deleteFigure", err));
+    if (published) {
+      location.reload();
+      return;
+    }
     await renderSubmitPanel(user);
   } catch (err) {
     msg.className = "msg err";
-    msg.textContent = "Could not delete your abstract. Please try again.";
-    console.error("[pints] deleteAbstract", err);
+    msg.textContent = "Could not retract your abstract. Please try again.";
+    console.error("[pints] retractAbstract", err);
   }
 }
 

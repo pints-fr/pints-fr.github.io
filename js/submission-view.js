@@ -1,5 +1,5 @@
 import { getPublicAbstract } from "./db.js";
-import { submissionStatusLabel } from "./abstract-utils.mjs";
+import { ownerCan, submissionStatusLabel } from "./abstract-utils.mjs";
 import { abstractCard, abstractPermalink } from "./abstract-card.js";
 
 /**
@@ -18,12 +18,17 @@ import { abstractCard, abstractPermalink } from "./abstract-card.js";
  * `mountAbstractForm`, because the two pages mount it into different hosts with
  * different options.
  *
- * `onDelete`, if given, adds a "Delete this abstract" button beside Edit. It is
- * optional rather than always-on: abstracts.html has nowhere else for a
- * deletion to happen, so it wires this up, while submit.html already offers
- * delete from inside the editor and does not need it twice.
+ * `onRetract`, if given, adds a "Retract this abstract" button beside Edit. It
+ * is optional rather than always-on: abstracts.html has nowhere else for a
+ * retraction to happen, so it wires this up, while submit.html already offers
+ * it from inside the editor and does not need it twice.
+ *
+ * `windows` is submissionWindows() of the site config. What the buttons offer
+ * comes from ownerCan(), the client half of the owner rules in firestore.rules.
  */
-export async function mountSubmissionCard(host, abstract, { onEdit, onDelete = null }) {
+export async function mountSubmissionCard(
+  host, abstract, { onEdit, onRetract = null, windows = null },
+) {
   // The poster/talk decision and the board number live only on the public copy,
   // so a decided abstract costs one extra read and an undecided one costs none.
   const published = abstract.status === "accepted"
@@ -42,41 +47,74 @@ export async function mountSubmissionCard(host, abstract, { onEdit, onDelete = n
     headingLevel: "h2",
   });
 
+  card.append(publishLine(abstract, windows));
+
   const actions = document.createElement("div");
   actions.className = "actions";
-  // Keyed on the status, not on the public copy: a half-finished acceptance —
-  // status set, abstracts_public not yet written — must lock too, which is
-  // exactly how `frozen` decides it in the form behind this button. Offering an
-  // editor that then refuses to save anything is worse than not offering one.
-  const frozen = abstract.status === "accepted";
+  const can = ownerCan(abstract, published, windows);
 
   const edit = document.createElement("button");
   edit.type = "button";
   edit.textContent = "Edit submission";
-  edit.disabled = frozen;
+  edit.disabled = !can.edit;
   edit.addEventListener("click", () => onEdit());
   actions.append(edit);
 
-  if (onDelete) {
-    // Frozen exactly when Edit is: firestore.rules refuses to delete an
-    // accepted abstract for the same reason it refuses to edit one.
-    const del = document.createElement("button");
-    del.type = "button";
-    del.className = "danger";
-    del.textContent = "Delete this abstract";
-    del.disabled = frozen;
-    del.addEventListener("click", () => onDelete());
-    actions.append(del);
+  if (onRetract) {
+    const retract = document.createElement("button");
+    retract.type = "button";
+    retract.className = "danger";
+    retract.textContent = "Retract this abstract";
+    retract.disabled = !can.retract;
+    retract.addEventListener("click", () => onRetract());
+    actions.append(retract);
   }
 
-  if (frozen) {
-    const note = document.createElement("span");
-    note.className = "muted";
-    note.textContent = "Accepted abstracts are frozen — ask an organizer to change one.";
-    actions.append(note);
-  }
-
+  const note = document.createElement("p");
+  note.className = "hint";
+  note.textContent = actionNote(abstract, published, windows, can);
   card.append(actions);
+  if (note.textContent) card.append(note);
   host.replaceChildren(card);
   return card;
+}
+
+/**
+ * Why a button is greyed out, or what pressing Retract costs. Empty when
+ * there is nothing to say.
+ */
+function actionNote(abstract, published, windows, can) {
+  if (!windows?.editOpen) return "Editing is closed.";
+  if (abstract.status === "accepted" && !published) {
+    return "Your abstract is being scheduled. Ask an organizer if you need to change it.";
+  }
+  if (!can.retract) {
+    return "Talks cannot be retracted. Contact the organizers if you cannot give yours.";
+  }
+  const until = windows.editingDeadline && !windows.submitOpen
+    ? ` You can edit or retract it until ${windows.editingDeadline.toLocaleString("en-GB")}.`
+    : "";
+  return `If you retract the poster you won’t be able to present it.${until}`;
+}
+
+/** Where the author's publish setting leaves the public listing. */
+function publishLine(abstract, windows) {
+  const line = document.createElement("p");
+  line.className = "muted";
+  const choice = abstract.publishChoice === "titleOnly"
+    ? "title and authors only"
+    : "title, authors and the full abstract";
+  if (abstract.publishConfirmed === true) {
+    line.textContent = `Public listing: ${choice} (confirmed). The figure is never public.`;
+  } else if (!windows?.editOpen) {
+    line.textContent = "Public listing: title, authors and the full abstract — the "
+      + "default, as no choice was confirmed. The figure is never public.";
+  } else {
+    const deadline = windows?.editingDeadline;
+    line.textContent = "Public listing: not confirmed yet. Until "
+      + (deadline ? deadline.toLocaleString("en-GB") : "the editing deadline")
+      + " only the title and authors are public; after that, the full abstract "
+      + "(never the figure). Edit your submission to confirm a choice.";
+  }
+  return line;
 }

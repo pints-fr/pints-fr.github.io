@@ -1,7 +1,8 @@
 import { mountLayout, setAuthLink } from "./layout.js";
 import { warnIfUnconfigured } from "./firebase.js";
 import { checkIsAdmin, refreshVerification, requireUser, sendVerification } from "./auth.js";
-import { getMyAbstract, getProfile } from "./db.js";
+import { getMyAbstract, getProfile, getPublicAbstract, getSiteConfig } from "./db.js";
+import { ownerCan, submissionWindows } from "./abstract-utils.mjs";
 import { mountAbstractForm } from "./abstract-form.js";
 import { mountSubmissionCard } from "./submission-view.js";
 
@@ -34,8 +35,9 @@ const say = (text, kind = "ok") => {
 };
 
 // Everything mount() learned, so the card and the editor can be swapped without
-// re-reading the profile each time.
-const state = { user: null, isAdmin: false, profile: null };
+// re-reading the profile each time. `windows` is submissionWindows() of the
+// site config, which decides what the card offers.
+const state = { user: null, isAdmin: false, profile: null, windows: null };
 
 if (!warnIfUnconfigured(msg)) {
   const user = await requireUser();
@@ -51,11 +53,14 @@ if (!warnIfUnconfigured(msg)) {
 }
 
 async function mount(user, isAdmin) {
-  const [profile, mine] = await Promise.all([getProfile(user.uid), getMyAbstract(user.uid)]);
+  const [profile, mine, config] = await Promise.all([
+    getProfile(user.uid), getMyAbstract(user.uid), getSiteConfig(),
+  ]);
 
   state.user = user;
   state.isAdmin = isAdmin;
   state.profile = profile;
+  state.windows = submissionWindows(config);
 
   // Clicking the verification link does not update the token this tab already
   // holds, so ask for a fresh one before deciding anything on it.
@@ -73,21 +78,50 @@ async function mount(user, isAdmin) {
   // visitor already asked for. Still falls back to the card for a frozen or
   // unverified abstract, where showForm would have nothing to offer anyway.
   if (mine) {
+    const published = await publicCopyOf(mine);
     const wantsEdit = new URLSearchParams(location.search).get("edit") === "1";
-    if (wantsEdit && mine.status !== "accepted" && user.emailVerified) return showForm(mine);
+    if (wantsEdit && ownerCan(mine, published, state.windows).edit && user.emailVerified) {
+      return showForm(mine, published);
+    }
     return showSubmitted(mine);
   }
 
   if (user.emailVerified) await showForm(null);
 }
 
-/** The editor. `abstract` null is a first submission; otherwise an edit. */
-async function showForm(abstract) {
+/**
+ * The public copy of an accepted abstract, or null. Only an accepted one has
+ * one, so anything else costs no read.
+ */
+async function publicCopyOf(abstract) {
+  if (abstract?.status !== "accepted") return null;
+  return getPublicAbstract(abstract.id).catch((err) => {
+    console.error("[pints] getPublicAbstract", err);
+    return null;
+  });
+}
+
+/**
+ * The editor. `abstract` null is a first submission; otherwise an edit.
+ *
+ * `published` is the public copy of an accepted abstract. Handing the form its
+ * type and board number as `republish` is what unlocks it: every save then
+ * rewrites that copy as well, which is the only way firestore.rules lets the
+ * owner touch an accepted abstract at all.
+ */
+async function showForm(abstract, published = null) {
   submittedEl.replaceChildren();
   await mountAbstractForm(host, {
     user: state.user,
     isAdmin: state.isAdmin,
     abstract,
+    republish: published
+      ? {
+        type: published.type,
+        posterNumber: published.posterNumber ?? null,
+        acceptedAt: published.acceptedAt ?? null,
+      }
+      : null,
     defaultAuthorName: state.profile?.displayName ?? "",
     defaultAffiliation: state.profile?.affiliation ?? "",
     // Only when editing: on a first submission there is nothing to go back to.
@@ -119,12 +153,12 @@ async function showForm(abstract) {
 async function showSubmitted(abstract) {
   host.replaceChildren();
   host.hidden = true;
-  intro.textContent = "One abstract per person. You can edit yours until the "
-    + "deadline.";
+  intro.textContent = "One abstract per person.";
   await mountSubmissionCard(submittedEl, abstract, {
-    onEdit: () => {
+    windows: state.windows,
+    onEdit: async () => {
       host.hidden = false;
-      showForm(abstract);
+      await showForm(abstract, await publicCopyOf(abstract));
     },
   });
 }

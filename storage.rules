@@ -14,9 +14,12 @@ service firebase.storage {
   match /b/{bucket}/o {
 
     match /abstract_figures/{uid}/{fileName} {
-      // Accepted figures are shown on the public abstract list, and the rules
-      // cannot tell an accepted abstract from a pending one. Read is public.
-      allow read: if true;
+      // Figures are for the organizers and reviewers only: the public abstract
+      // list never shows one (js/abstract-utils.mjs publicFields()). So a read
+      // by path is the uploader's alone. The admin console still shows every
+      // figure, because it loads the stored figureUrl — a download URL that
+      // carries its own token, which Firebase honours whatever these rules say.
+      allow read: if request.auth != null && request.auth.uid == uid;
 
       // Mirrors js/figure-utils.mjs validateFigure(). The client downscales
       // first, so a legitimate upload lands far under this ceiling; the limit is

@@ -7,7 +7,11 @@ import {
   filterAdminAbstracts,
   groupByTopic,
   nextPosterNumber,
+  ownerCan,
+  publicFields,
+  publicMode,
   sortPublicAbstracts,
+  submissionWindows,
   submissionStatusLabel,
   submissionStatusTone,
   summaryAuthorLine,
@@ -335,5 +339,117 @@ test("submissionStatusTone falls back to review, like the label", () => {
   for (const odd of ["", null, undefined, "banquet"]) {
     assert.equal(submissionStatusTone(odd), "review");
     assert.equal(submissionStatusLabel(odd), "In review");
+  }
+});
+
+test("draftFingerprint notices a change of publish setting", () => {
+  const base = draftFingerprint(draft());
+  assert.notEqual(draftFingerprint({ ...draft(), publishChoice: "titleOnly" }), base);
+  assert.notEqual(draftFingerprint({ ...draft(), publishConfirmed: true }), base);
+  assert.equal(draftFingerprint({ ...draft(), publishChoice: "full" }), base);
+});
+
+// ------------------------------------------------------- submissionWindows
+
+const NOW = new Date("2026-10-15T12:00:00Z");
+const BEFORE = new Date("2026-10-20T00:00:00Z");
+const PAST = new Date("2026-10-10T00:00:00Z");
+// What getSiteConfig() actually hands back: Firestore Timestamps, not Dates.
+const ts = (date) => ({ toDate: () => date });
+
+test("submissionWindows: a config from before the editing window behaves as before", () => {
+  assert.deepEqual(
+    pick(submissionWindows({ submissionsOpen: true, submissionDeadline: ts(BEFORE) }, NOW)),
+    { submitOpen: true, editOpen: true });
+  assert.deepEqual(
+    pick(submissionWindows({ submissionsOpen: true, submissionDeadline: ts(PAST) }, NOW)),
+    { submitOpen: false, editOpen: false });
+});
+
+test("submissionWindows: editing outlives submissions until its own deadline", () => {
+  const cfg = {
+    submissionsOpen: true, submissionDeadline: ts(PAST),
+    editingOpen: true, editingDeadline: ts(BEFORE),
+  };
+  assert.deepEqual(pick(submissionWindows(cfg, NOW)), { submitOpen: false, editOpen: true });
+  assert.deepEqual(pick(submissionWindows({ ...cfg, editingDeadline: ts(PAST) }, NOW)),
+    { submitOpen: false, editOpen: false });
+  assert.deepEqual(pick(submissionWindows({ ...cfg, editingOpen: false }, NOW)),
+    { submitOpen: false, editOpen: false });
+});
+
+test("submissionWindows: editing ticked without a deadline is closed, not open", () => {
+  assert.equal(submissionWindows({ editingOpen: true }, NOW).editOpen, false);
+});
+
+test("submissionWindows: the submission checkbox controls only new abstracts", () => {
+  const cfg = {
+    submissionsOpen: false, submissionDeadline: ts(BEFORE),
+    editingOpen: true, editingDeadline: ts(BEFORE),
+  };
+  assert.deepEqual(pick(submissionWindows(cfg, NOW)), { submitOpen: false, editOpen: true });
+});
+
+test("submissionWindows: a missing config is closed", () => {
+  assert.deepEqual(pick(submissionWindows(null, NOW)), { submitOpen: false, editOpen: false });
+});
+
+function pick({ submitOpen, editOpen }) { return { submitOpen, editOpen }; }
+
+// ----------------------------------------------------------------- ownerCan
+
+const open = { editOpen: true };
+const closed = { editOpen: false };
+
+test("ownerCan: anything still in review can be edited and retracted while editing is open", () => {
+  for (const status of ["submitted", "rejected", "withdrawn"]) {
+    assert.deepEqual(ownerCan({ status }, null, open), { edit: true, retract: true });
+    assert.deepEqual(ownerCan({ status }, null, closed), { edit: false, retract: false });
+  }
+});
+
+test("ownerCan: an accepted poster is self-service, a talk cannot be retracted", () => {
+  assert.deepEqual(ownerCan({ status: "accepted" }, { type: "poster" }, open),
+    { edit: true, retract: true });
+  assert.deepEqual(ownerCan({ status: "accepted" }, { type: "talk" }, open),
+    { edit: true, retract: false });
+  assert.deepEqual(ownerCan({ status: "accepted" }, { type: "talk" }, closed),
+    { edit: false, retract: false });
+});
+
+test("ownerCan: a half-finished acceptance with no public copy stays locked", () => {
+  assert.deepEqual(ownerCan({ status: "accepted" }, null, open), { edit: false, retract: false });
+});
+
+test("ownerCan: no abstract, nothing to do", () => {
+  assert.deepEqual(ownerCan(null, null, open), { edit: false, retract: false });
+});
+
+// ------------------------------------------------------ publicMode / Fields
+
+test("publicMode: a confirmed choice is honoured", () => {
+  assert.equal(publicMode({ publishConfirmed: true, publishChoice: "titleOnly" }), "titleOnly");
+  assert.equal(publicMode({ publishConfirmed: true, publishChoice: "full" }), "full");
+  assert.equal(publicMode({ publishConfirmed: true }), "full");
+});
+
+test("publicMode: an unconfirmed choice is held back until editing closes", () => {
+  const unconfirmed = { publishConfirmed: false, publishChoice: "titleOnly" };
+  assert.equal(publicMode(unconfirmed), "pending");
+  assert.equal(publicMode(unconfirmed, { editClosed: true }), "full");
+  assert.equal(publicMode({}, { editClosed: true }), "full");
+});
+
+test("publicFields never carries the figure, and carries the body only in full mode", () => {
+  const abstract = {
+    ...draft(), figureUrl: "https://x/f.png", figurePath: "p", figureCaption: "c",
+  };
+  for (const mode of ["full", "titleOnly", "pending"]) {
+    const fields = publicFields(abstract, mode);
+    assert.equal("figureUrl" in fields, false);
+    assert.equal("figureCaption" in fields, false);
+    assert.equal(fields.publishMode, mode);
+    assert.equal(fields.body, mode === "full" ? abstract.body : null);
+    assert.equal(fields.title, abstract.title);
   }
 });

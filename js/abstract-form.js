@@ -4,10 +4,10 @@ import {
   parseAffiliations,
   validateAbstract,
 } from "./abstract-validation-utils.mjs";
-import { draftFingerprint } from "./abstract-utils.mjs";
+import { draftFingerprint, retractQuestion, submissionWindows } from "./abstract-utils.mjs";
 import { validateFigure } from "./figure-utils.mjs";
 import { abstractCard } from "./abstract-card.js";
-import { deleteAbstract, getSiteConfig, saveAbstract } from "./db.js";
+import { getSiteConfig, retractAbstract, saveAbstract } from "./db.js";
 import { deleteFigure, uploadFigure } from "./storage.js";
 
 const TEMPLATE = `
@@ -70,9 +70,30 @@ const TEMPLATE = `
       </label>
     </div>
 
+    <fieldset id="abs-publish">
+      <legend>On the public abstract list</legend>
+      <p class="hint">Only matters if your abstract is accepted. The figure is never
+        public: it is shown to the organizers and reviewers only.</p>
+      <div class="checkline">
+        <input id="abs-pub-full" type="radio" name="abs-publish" value="full" checked>
+        <label for="abs-pub-full">Title, authors and the full abstract (no figure)</label>
+      </div>
+      <div class="checkline">
+        <input id="abs-pub-title" type="radio" name="abs-publish" value="titleOnly">
+        <label for="abs-pub-title">Title and authors only (no abstract, no figure)</label>
+      </div>
+      <div class="checkline">
+        <input id="abs-pub-confirm" type="checkbox">
+        <label for="abs-pub-confirm">I confirm this publication setting
+          <span class="hint" id="abs-pub-hint"></span>
+        </label>
+      </div>
+    </fieldset>
+
     <h3>Preview</h3>
-    <p class="hint">Exactly what the abstract list will show, figure and caption
-      included. It updates as you type.</p>
+    <p class="hint">What the organizers and reviewers will read, figure included.
+      It updates as you type. The public list never shows the figure, and shows no
+      abstract text if you choose title and authors only.</p>
     <div id="abs-preview"></div>
 
     <!-- Beside the button, not at the top of the form. Validation errors and save
@@ -84,8 +105,9 @@ const TEMPLATE = `
 
     <div class="actions">
       <button type="submit" id="abs-save">Submit abstract</button>
-      <button type="button" id="abs-delete" class="danger" hidden>Delete this abstract</button>
+      <button type="button" id="abs-delete" class="danger" hidden>Retract this abstract</button>
     </div>
+    <p id="abs-retract-note" class="hint" hidden></p>
   </form>
 `;
 
@@ -191,13 +213,15 @@ function wireAuthorDrag(authorsEl, onDrop) {
  * re-render. `defaultAuthorName` and `defaultAffiliation` seed the first author
  * row and the affiliations box from the profile.
  * `onCancel`, when given, adds a Cancel button to the action row, and `onDelete`
- * overrides what the delete button does — a participant deleting their own
+ * overrides what the delete button does — a participant RETRACTING their own
  * abstract is a document write their credentials permit, while an organizer
- * deleting somebody else's has to go through the Cloud Function.
+ * deleting somebody else's has to go through the Cloud Function. Without the
+ * override the button says Retract; with it, Delete.
  *
  * `republish` is what unlocks an ACCEPTED abstract. It carries the public
  * projection's type and poster number, and supplying it is a promise that the
- * save will rewrite abstracts_public too.
+ * save will rewrite abstracts_public too. A TALK's republish also takes the
+ * retract button away: talks cannot be retracted.
  *
  * `user` is required and must be signed in: firestore.rules keys the abstract on
  * the owner's uid and storage.rules keys the figure on the uploader's, so there
@@ -239,8 +263,11 @@ export async function mountAbstractForm(
   const figureRemove = $("#abs-figure-remove");
   const captionEl = $("#abs-figure-caption");
   const noTalkEl = $("#abs-no-talk");
+  const pubTitleEl = $("#abs-pub-title");
+  const pubConfirmEl = $("#abs-pub-confirm");
   const saveBtn = $("#abs-save");
   const deleteBtn = $("#abs-delete");
+  const retractNote = $("#abs-retract-note");
 
   const placeholder = document.createElement("option");
   placeholder.value = "";
@@ -279,14 +306,22 @@ export async function mountAbstractForm(
     msg.replaceChildren(document.createTextNode("Please fix the following:"), ul);
   };
 
+  // Two windows: submitting a NEW abstract, and changing one already in
+  // (editing, retracting, the publish setting). The second outlives the first.
   const config = await getSiteConfig();
-  const deadline = config?.submissionDeadline?.toDate?.() ?? null;
   const submissionsOpen = Boolean(config?.submissionsOpen);
-  const windowOpen = submissionsOpen && (!deadline || new Date() < deadline);
+  const windows = submissionWindows(config);
+  const { deadline, editingDeadline } = windows;
+  const when = (date) => date.toLocaleString("en-GB");
 
-  $("#window-note").textContent = windowOpen
-    ? `Submissions are open${deadline ? ` until ${deadline.toLocaleString("en-GB")}` : ""}.`
-    : "Submissions are closed.";
+  $("#window-note").textContent = windows.submitOpen
+    ? `Submissions are open${deadline ? ` until ${when(deadline)}` : ""}.`
+    : windows.editOpen && abstract && editingDeadline
+      ? `Submissions are closed. You can edit or retract your abstract until ${when(editingDeadline)}.`
+      : "Submissions are closed.";
+  $("#abs-pub-hint").textContent = editingDeadline
+    ? `If you have not confirmed by ${when(editingDeadline)}, the first option applies.`
+    : "If you do not confirm, the first option applies.";
 
   // Figure state, tracked separately from the form fields: `pendingFile` is a
   // chosen-but-not-yet-uploaded File, and figureUrl/figurePath are what is
@@ -336,6 +371,8 @@ export async function mountAbstractForm(
     bodyEl.value = abstract.body ?? "";
     captionEl.value = abstract.figureCaption ?? "";
     noTalkEl.checked = abstract.talkConsidered === false;
+    pubTitleEl.checked = abstract.publishChoice === "titleOnly";
+    pubConfirmEl.checked = abstract.publishConfirmed === true;
     for (const author of abstract.authors ?? []) {
       authorsEl.append(authorRow({
         name: author.name,
@@ -360,17 +397,17 @@ export async function mountAbstractForm(
   updateAuthorMoveButtons(authorsEl);
   wireAuthorDrag(authorsEl, onAuthorsChanged);
 
-  // Only an accepted abstract is locked, matching the rules: its public copy
-  // would otherwise go stale. A rejected one stays editable so the participant
-  // can revise and resubmit before the deadline.
+  // An accepted abstract is locked unless the caller has wired up `republish`,
+  // matching the rules: every save of an accepted abstract has to rewrite its
+  // public copy in the same batch, or that copy goes stale.
   //
   // The exemption is keyed on `republish`, NOT on isAdmin. An accepted abstract
   // is editable exactly when the caller has wired up the public-copy rewrite,
-  // which is the only thing that makes the edit safe. Keying it on isAdmin
-  // instead would unlock an organizer's own accepted abstract on account.html,
-  // where nothing rewrites abstracts_public — publishing one text and showing
-  // another. A missing republish therefore fails closed, to read-only.
-  const frozen = abstract?.status === "accepted" && !republish;
+  // which is the only thing that makes the edit safe. A missing republish
+  // therefore fails closed, to read-only.
+  const accepted = abstract?.status === "accepted";
+  const frozen = accepted && !republish;
+  const isTalk = accepted && republish?.type === "talk";
 
   // Register first, then submit: firestore.rules requires `email_verified` on an
   // abstract write, so an unconfirmed address makes this read-only rather than a
@@ -379,24 +416,37 @@ export async function mountAbstractForm(
   // link does not refresh the token a tab already holds, so the CALLER refreshes
   // it (refreshVerification) before mounting, and this reflects that.
   //
-  // Organizers are exempt from both this and the submission window, because
+  // Organizers are exempt from both this and the windows, because
   // firestore.rules already grants them `allow write: if isAdmin()`. Gating them
   // in the UI alone would be theatre.
   const verified = isAdmin || Boolean(user?.emailVerified);
+  const windowOpen = abstract ? windows.editOpen : windows.submitOpen;
   const editable = (isAdmin || windowOpen) && !frozen && verified;
+  // A save by the owner outside the submission window is a correction, not a
+  // resubmission: the rules pin the status, so a rejected abstract stays
+  // rejected rather than going back in front of the committee.
+  const lateEdit = Boolean(abstract) && !windows.submitOpen && !accepted;
 
   if (frozen) notice("This abstract has been accepted. Contact the organizers to change it.");
   else if (isAdmin && !windowOpen) {
     notice(editingSomeoneElse
-      ? "Submissions are closed, but as an organizer you can still edit this abstract."
+      ? "Editing is closed, but as an organizer you can still edit this abstract."
       : "You are an organizer, so you can submit even though submissions are closed.");
   } else if (!windowOpen) {
-    notice("Submissions are closed. You can still read your abstract.");
+    notice(abstract
+      ? "Editing is closed. You can still read your abstract."
+      : "Submissions are closed.");
   } else if (!verified) {
     notice("Confirm your email address before submitting. Your account page has a "
       + "button to send the link again.");
+  } else if (accepted && !editingSomeoneElse) {
+    notice("Your abstract has been accepted. Changes you save appear on the public "
+      + "list straight away.", "ok");
   } else if (abstract?.status === "rejected") {
-    notice("This abstract was not accepted. You can revise and resubmit it before the deadline.");
+    notice(lateEdit
+      ? "This abstract was not accepted. You can still correct it, but it will not "
+        + "go back into review."
+      : "This abstract was not accepted. You can revise and resubmit it before the deadline.");
   }
 
   if (!editable) {
@@ -404,7 +454,19 @@ export async function mountAbstractForm(
       field.disabled = true;
     }
   }
-  deleteBtn.hidden = !(abstract && editable);
+
+  // Retracting follows editing, except for a talk: the programme is built around
+  // it. An organizer's onDelete is a different act — a delete — and keeps the
+  // word.
+  const canRetract = (onDelete ? true : !isTalk) && editable;
+  if (onDelete) deleteBtn.textContent = "Delete this abstract";
+  deleteBtn.hidden = !(abstract && canRetract);
+  if (!onDelete && abstract && editable) {
+    retractNote.hidden = false;
+    retractNote.textContent = isTalk
+      ? "Talks cannot be retracted. Contact the organizers if you cannot give yours."
+      : "If you retract the poster you won’t be able to present it.";
+  }
 
   // storage.rules keys uploads to the uploader's uid and cannot read Firestore
   // to learn who is an organizer, so an admin simply cannot write to another
@@ -447,6 +509,8 @@ export async function mountAbstractForm(
     body: bodyEl.value,
     talkConsidered: !noTalkEl.checked,
     figureCaption: captionEl.value,
+    publishChoice: pubTitleEl.checked ? "titleOnly" : "full",
+    publishConfirmed: pubConfirmEl.checked,
     hasFigure: Boolean(pendingFile) || Boolean(figureUrl && !figureCleared),
   });
 
@@ -523,10 +587,12 @@ export async function mountAbstractForm(
    */
   async function submitForm({ notify = true } = {}) {
     const draft = collect();
-    // No window check for organizers: firestore.rules lets them write at any
-    // time, and refusing here would undo the `editable` exemption above at the
-    // last step. validateAbstract's defaults are "open, no deadline".
-    const { errors } = validateAbstract(draft, isAdmin ? {} : { submissionsOpen, deadline });
+    // The submission window is checked only for a NEW abstract: an existing one
+    // answers to the editing window, which `editable` has already applied, and
+    // organizers to neither — firestore.rules lets them write at any time.
+    // validateAbstract's defaults are "open, no deadline".
+    const { errors } = validateAbstract(draft,
+      isAdmin || abstract ? {} : { submissionsOpen, deadline });
     if (errors.length) {
       sayErrors(errors);
       return false;
@@ -555,18 +621,21 @@ export async function mountAbstractForm(
         ownerUid,
         { ...draft, figureUrl, figurePath },
         {
-          // An organizer's edit leaves the status alone; a participant's save is
-          // a (re)submission, which is what the rules expect.
-          status: editingSomeoneElse ? (abstract?.status ?? "submitted") : "submitted",
+          // An organizer's edit leaves the status alone, and so does an owner's
+          // correction to an accepted abstract or a late one. Anything else is a
+          // (re)submission. Each matches a branch of the update rule.
+          status: editingSomeoneElse || accepted || lateEdit
+            ? (abstract?.status ?? "submitted")
+            : "submitted",
           createdAt: abstract?.createdAt ?? null,
-          republish: abstract?.status === "accepted" ? republish : null,
+          republish: accepted ? { ...republish, editClosed: !windows.editOpen } : null,
         },
       );
       say(editingSomeoneElse
         ? "Abstract saved." + (abstract?.status === "accepted"
           ? " The public list has been updated too." : "")
-        : "Abstract saved. You can edit it until the deadline.", "ok");
-      deleteBtn.hidden = false;
+        : "Abstract saved.", "ok");
+      deleteBtn.hidden = !canRetract;
       saveBtn.textContent = "Save changes";
       figureEl.value = "";
       // What is on screen is now what is stored, so a second switch away must
@@ -592,17 +661,17 @@ export async function mountAbstractForm(
 
   deleteBtn.addEventListener("click", async () => {
     if (onDelete) return onDelete();
-    if (!confirm(`Delete “${abstract?.title ?? "this abstract"}”? This cannot be undone.`)) return;
+    if (!confirm(retractQuestion(abstract, windows))) return;
     deleteBtn.disabled = true;
     try {
-      await deleteAbstract(abstract.id);
+      await retractAbstract(abstract.id, { published: accepted });
       // Best-effort: an orphaned figure is invisible and costs nothing, whereas
       // failing the delete over it would leave the abstract in place.
       await deleteFigure(figurePath).catch((err) => console.error("[pints] deleteFigure", err));
       await onSaved();
     } catch (err) {
-      say("Could not delete the abstract.", "err");
-      console.error("[pints] deleteAbstract", err);
+      say("Could not retract the abstract.", "err");
+      console.error("[pints] retractAbstract", err);
       deleteBtn.disabled = false;
     }
   });
