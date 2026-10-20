@@ -11,7 +11,7 @@ import {
   blindExportRows, stripAuthors,
 } from "./abstract-export-utils.mjs";
 import {
-  describeReviewStats, myScoreSummary, reviewScoreMatrix, reviewStats,
+  countReviews, describeReviewStats, myScoreSummary, reviewScoreMatrix, reviewStats,
   reviewerLabels, reviewerList, SCORE_LABELS, isRetiredScore, isScore, scoreLabel,
   scoreOptions, sortByMeanScore, sortByTitle, summariseScore,
 } from "./review-utils.mjs";
@@ -23,6 +23,7 @@ import { deleteAbstractCompletely } from "./functions.js";
 import { toCsv } from "./csv-utils.mjs";
 import { download } from "./download.js";
 import {
+  clearAllReviews,
   getSiteConfig,
   listAbstracts,
   listAdmins,
@@ -302,11 +303,59 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
       download("pints-reviewer-scores-comments.csv", toCsv(rows, columns));
     });
 
+    // Everybody's review again, so hidden in reviewer mode like the export.
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "danger";
+    clearBtn.id = "adm-clear-reviews";
+    clearBtn.textContent = "Delete all review scores and comments";
+    clearBtn.title = "Remove every organizer's score and comment on every abstract. "
+      + "Accept and reject decisions are kept.";
+    clearBtn.addEventListener("click", async () => {
+      if (blind) return;
+      clearBtn.disabled = true;
+      try {
+        await clearReviews();
+      } catch (err) {
+        say("Could not delete the review scores and comments.", "err");
+        console.error("[pints] clearAllReviews", err);
+      } finally {
+        clearBtn.disabled = false;
+      }
+    });
+
     const note = document.createElement("span");
     note.className = "muted";
     note.id = "adm-export-note";
 
-    bar.append(toggleAll, abstractsBtn, scoresBtn, note);
+    bar.append(toggleAll, abstractsBtn, scoresBtn, clearBtn, note);
+  }
+
+  /**
+   * Every review by every organizer on every abstract — not just the ones the
+   * filters show, which is why the confirmation names the total. Counted from a
+   * fresh read, so the number promised is the number deleted.
+   */
+  async function clearReviews() {
+    const { reviews, abstracts } = countReviews(await listReviews());
+    if (!reviews) {
+      say("There are no review scores or comments to delete.", "ok");
+      return;
+    }
+    const choice = await confirmChoice({
+      title: "Delete all review scores and comments",
+      message: `Delete ${reviews} review${reviews === 1 ? "" : "s"} on ${abstracts} `
+        + `abstract${abstracts === 1 ? "" : "s"} — every organizer's scores and comments? `
+        + "Accept and reject decisions are kept. This cannot be undone.",
+      choices: [
+        { value: "delete", label: "Delete all scores and comments", className: "danger" },
+        { value: "cancel", label: "Cancel", className: "secondary" },
+      ],
+    });
+    if (choice !== "delete") return;
+    const result = await clearAllReviews();
+    say(`Deleted ${result.reviews} review${result.reviews === 1 ? "" : "s"} `
+      + `on ${result.abstracts} abstract${result.abstracts === 1 ? "" : "s"}.`, "warn");
+    await render();
   }
 
   /**
@@ -798,6 +847,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
       ? "title, text"
       : "title, author, affiliation, text";
     host.querySelector("#adm-export-scores").hidden = blind;
+    host.querySelector("#adm-clear-reviews").hidden = blind;
     if (blind) editingId = null;
 
     reviewsById = reviews;

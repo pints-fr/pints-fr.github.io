@@ -4,7 +4,6 @@ import {
   deleteDoc,
   deleteField,
   doc,
-  FieldPath,
   getDoc,
   getDocs,
   query,
@@ -18,6 +17,7 @@ import { db, publicDb } from "./firebase.js";
 import { CURRENT_EDITION } from "./config.mjs";
 import { newLinkToken } from "./registration-utils.mjs";
 import { publicFields, publicMode } from "./abstract-utils.mjs";
+import { countReviews } from "./review-utils.mjs";
 
 const snapData = (snap) => ({ id: snap.id, ...snap.data() });
 
@@ -292,44 +292,34 @@ export const saveMyReview = (abstractId, reviewerUid, { score, note }) =>
   }, { merge: true });
 
 /**
- * Wipe every organizer's comment on every abstract, keeping their scores.
+ * Wipe every organizer's score and comment on every abstract.
  *
- * Read fresh rather than from the console's last render, so a comment saved by
- * another organizer a minute ago is not left behind. A field-path update per
- * note, not a set: the score, `at`, and the decision fields beside each note
- * must come through untouched. The legacy shared `note` goes too — it is a
- * review comment like the others, just one nobody can attribute.
+ * Read fresh rather than from the console's last render, so a review saved by
+ * another organizer a minute ago is not left behind. A field update, not a
+ * delete of the document: `decidedBy` and `decidedAt` live beside the reviews
+ * and record who accepted or rejected the abstract, which is not a review. The
+ * legacy shared `note` goes too — it is a review comment like the others, just
+ * one nobody can attribute.
  *
- * Batches hold 500 writes; each abstract is one write however many notes it
+ * Batches hold 500 writes; each abstract is one write however many reviews it
  * carries.
  */
-export async function clearAllReviewNotes() {
+export async function clearAllReviews() {
   const snap = await getDocs(collection(db, "abstract_reviews"));
-  const updates = [];
-  let notes = 0;
+  const refs = [];
+  const { reviews } = countReviews(new Map(snap.docs.map((d) => [d.id, d.data()])));
   for (const d of snap.docs) {
     const data = d.data();
-    const pairs = [];
-    for (const [uid, review] of Object.entries(data.reviews ?? {})) {
-      if (String(review?.note ?? "").trim()) {
-        pairs.push(new FieldPath("reviews", uid, "note"), "");
-        notes += 1;
-      }
-    }
-    if (typeof data.note === "string") {
-      pairs.push(new FieldPath("note"), deleteField());
-      if (data.note.trim()) notes += 1;
-    }
-    if (pairs.length) updates.push([d.ref, pairs]);
+    if (data.reviews !== undefined || data.note !== undefined) refs.push(d.ref);
   }
-  for (let i = 0; i < updates.length; i += 500) {
+  for (let i = 0; i < refs.length; i += 500) {
     const batch = writeBatch(db);
-    for (const [ref, [field, value, ...more]] of updates.slice(i, i + 500)) {
-      batch.update(ref, field, value, ...more);
+    for (const ref of refs.slice(i, i + 500)) {
+      batch.update(ref, { reviews: deleteField(), note: deleteField() });
     }
     await batch.commit();
   }
-  return { notes, abstracts: updates.length };
+  return { reviews, abstracts: refs.length };
 }
 
 /**

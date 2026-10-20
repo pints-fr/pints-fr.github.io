@@ -137,21 +137,25 @@ export function reviewerLabels(reviewers, reviewsById = new Map()) {
 }
 
 /**
- * How many comments "Delete all review comments" would remove, and from how
- * many abstracts — counted the way db.js clearAllReviewNotes() counts them, so
- * the confirmation does not promise a number the deletion then contradicts.
+ * How many reviews "Delete all review scores and comments" would remove, and
+ * from how many abstracts — counted the way db.js clearAllReviews() reads
+ * them, so the confirmation does not promise a number the deletion then
+ * contradicts. A review is one organizer's entry with any score (an old
+ * ten-point one included, since it is deleted too) or a non-blank comment; the
+ * legacy shared note counts as one more.
  */
-export function countReviewNotes(reviewsById = new Map()) {
-  let notes = 0;
+export function countReviews(reviewsById = new Map()) {
+  let reviews = 0;
   let abstracts = 0;
   for (const stored of reviewsById?.values?.() ?? []) {
     const here = Object.values(stored?.reviews ?? {})
-      .filter((review) => String(review?.note ?? "").trim()).length
+      .filter((review) => (review?.score ?? null) !== null
+        || String(review?.note ?? "").trim()).length
       + (String(stored?.note ?? "").trim() ? 1 : 0);
-    notes += here;
+    reviews += here;
     if (here) abstracts += 1;
   }
-  return { notes, abstracts };
+  return { reviews, abstracts };
 }
 
 const collator = new Intl.Collator("en", { sensitivity: "base" });

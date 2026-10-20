@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  SCORE_LABELS, countReviewNotes, describeReviewStats, isRetiredScore, isScore, myScore,
+  SCORE_LABELS, countReviews, describeReviewStats, isRetiredScore, isScore, myScore,
   myScoreSummary, reviewScoreMatrix, reviewStats, reviewerLabels, reviewerList, scoreLabel,
   scoreOptions, sortByMeanScore, sortByTitle, summariseScore,
 } from "../js/review-utils.mjs";
@@ -313,11 +313,13 @@ test("sortByMeanScore with a uid sorts by that organizer's score, not the mean",
     ["a", "b", "c"]);
 });
 
-test("countReviewNotes counts every non-blank comment, legacy ones included", () => {
-  assert.deepEqual(countReviewNotes(new Map([
+test("countReviews counts every score or comment, legacy ones included", () => {
+  assert.deepEqual(countReviews(new Map([
     ["a", { reviews: { boss: { score: 3, note: "fine" }, olivia: { note: "  " } } }],
     ["b", { note: "old shared note", reviews: { boss: { note: "weak" } } }],
     ["c", { reviews: { boss: { score: 4 } } }],
-  ])), { notes: 3, abstracts: 2 });
-  assert.deepEqual(countReviewNotes(new Map()), { notes: 0, abstracts: 0 });
+    ["d", { reviews: { kai: { score: 7 } } }],
+    ["e", { reviews: { kai: { score: null, note: "" } }, decidedBy: "boss" }],
+  ])), { reviews: 5, abstracts: 4 });
+  assert.deepEqual(countReviews(new Map()), { reviews: 0, abstracts: 0 });
 });
