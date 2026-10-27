@@ -6,6 +6,7 @@ import { mountHeroSlider } from "./hero-slider.js";
 import { heroPhotos } from "./hero-utils.mjs";
 import { withNext } from "./redirect-utils.mjs";
 import { isRegistrationOpen } from "./registration-utils.mjs";
+import { submissionWindows } from "./abstract-utils.mjs";
 import { EVENT } from "./config.mjs";
 import { googleCalendarUrl, outlookCalendarUrl, icsContent } from "./calendar-utils.mjs";
 import { download } from "./download.js";
@@ -47,14 +48,18 @@ async function updateSubmitCta(user) {
   submitCta.href = mine ? "abstracts.html" : "submit.html";
 }
 
-// The home page's "Register" button, taken down while registration is closed.
-// Not awaited: it is one button, and the page copy should not wait on it. A
-// failed read leaves the button up, and register.html says it is closed.
+// The home page's "Register" and "Submit an abstract" buttons, each taken down
+// while its window is closed. Not awaited: they are two buttons, and the page
+// copy should not wait on them. A failed read leaves both up, and the pages
+// behind them say they are closed.
 const registerCta = document.getElementById("register-cta");
-if (registerCta) {
+if (registerCta || submitCta) {
   getSiteConfig()
-    .then((config) => { registerCta.hidden = !isRegistrationOpen(config); })
-    .catch((err) => console.error("[pints] register cta", err));
+    .then((config) => {
+      if (registerCta) registerCta.hidden = !isRegistrationOpen(config);
+      if (submitCta) submitCta.hidden = !submissionWindows(config).submitOpen;
+    })
+    .catch((err) => console.error("[pints] home ctas", err));
 }
 
 await hydrateMarkdownHosts();

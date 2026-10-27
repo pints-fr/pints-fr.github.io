@@ -43,18 +43,20 @@ async function renderSubmitPanel(user) {
   const token = ++submitPanelToken;
   submitCta.href = user ? "submit.html" : withNext("login.html", "submit.html");
 
-  const [mine, config] = user
-    ? await Promise.all([
-      getMyAbstract(user.uid).catch((err) => {
+  // The config is read signed out too: it is what says whether the submit
+  // button should be offered at all.
+  const [mine, config] = await Promise.all([
+    user
+      ? getMyAbstract(user.uid).catch((err) => {
         console.error("[pints] getMyAbstract", err);
         return null;
-      }),
-      getSiteConfig().catch((err) => {
-        console.error("[pints] getSiteConfig", err);
-        return null;
-      }),
-    ])
-    : [null, null];
+      })
+      : null,
+    getSiteConfig().catch((err) => {
+      console.error("[pints] getSiteConfig", err);
+      return null;
+    }),
+  ]);
 
   if (token !== submitPanelToken) return; // superseded by a later auth state
 
@@ -67,7 +69,9 @@ async function renderSubmitPanel(user) {
       onRetract: () => retractMyAbstract(user, mine, windows),
     });
   } else {
-    submitCtaBlockEl.hidden = false;
+    // Gone once submissions close: the intro invites a submission too. A failed
+    // config read leaves it up, and submit.html says the window is closed.
+    submitCtaBlockEl.hidden = config ? !submissionWindows(config).submitOpen : false;
     myAbstractEl.replaceChildren();
   }
 }
