@@ -1,6 +1,9 @@
 import { SCHEDULE_KINDS, SCHEDULE_SESSIONS, SESSION_LABELS } from "./config.mjs";
 import { formatTimeRange, groupScheduleBySession } from "./schedule-utils.mjs";
-import { deleteScheduleItem, listSchedule, saveScheduleItem } from "./db.js";
+import { abstractListLink, presenterOf, sortPublicAbstracts } from "./abstract-utils.mjs";
+import {
+  deleteScheduleItem, listPublicAbstracts, listSchedule, saveScheduleItem,
+} from "./db.js";
 
 // PINTS is one day in one venue, so there is no date, no room, and no manual
 // rank: the start time is the whole ordering. The event date itself lives in
@@ -99,6 +102,45 @@ export async function mountScheduleTab(host) {
   kindSessionRow.append(sessionField, kindField);
   form.append(kindSessionRow);
 
+  // A talk slot can point at the abstract it presents, and the public program
+  // then links its title there. Only published abstracts are offered: the link
+  // goes to the public page, which shows nothing else.
+  const abstractLabel = document.createElement("label");
+  abstractLabel.setAttribute("for", "s-abstract");
+  abstractLabel.textContent = "Linked abstract";
+  const abstractSelect = document.createElement("select");
+  abstractSelect.id = "s-abstract";
+  form.append(abstractLabel, abstractSelect);
+  let abstractsById = new Map();
+
+  function fillAbstractOptions(list) {
+    abstractsById = new Map(list.map((a) => [a.id, a]));
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "— none —";
+    abstractSelect.replaceChildren(none);
+    for (const a of sortPublicAbstracts(list)) {
+      const option = document.createElement("option");
+      option.value = a.id;
+      const tag = a.type === "talk" ? "Talk"
+        : Number.isInteger(a.posterNumber) ? `P${a.posterNumber}` : "Poster";
+      option.textContent = `${tag} · ${a.title ?? "(untitled)"}`;
+      abstractSelect.append(option);
+    }
+  }
+
+  // Fills only what is still empty, so picking an abstract for a slot already
+  // typed in never overwrites the organizer's wording.
+  abstractSelect.addEventListener("change", () => {
+    const abstract = abstractsById.get(abstractSelect.value);
+    if (!abstract) return;
+    const { speaker, affiliation } = presenterOf(abstract);
+    const fill = { title: abstract.title ?? "", speaker, affiliation };
+    for (const [key, value] of Object.entries(fill)) {
+      if (!field(key).value.trim()) field(key).value = value;
+    }
+  });
+
   const actions = document.createElement("div");
   actions.className = "actions";
   const save = document.createElement("button");
@@ -119,6 +161,7 @@ export async function mountScheduleTab(host) {
     for (const spec of FIELDS) field(spec.key).value = "";
     kindSelect.value = "talk";
     sessionSelect.value = "";
+    abstractSelect.value = "";
     heading.textContent = "Add an item";
     save.textContent = "Add item";
     cancel.hidden = true;
@@ -129,6 +172,9 @@ export async function mountScheduleTab(host) {
     for (const spec of FIELDS) field(spec.key).value = item[spec.key] ?? "";
     kindSelect.value = item.kind ?? "talk";
     sessionSelect.value = SCHEDULE_SESSIONS.includes(item.session) ? item.session : "";
+    // A link to an abstract since un-accepted shows as none rather than as a
+    // blank select; saving then drops it, which is what it should be.
+    abstractSelect.value = abstractsById.has(item.abstractId) ? item.abstractId : "";
     heading.textContent = `Editing: ${item.title}`;
     save.textContent = "Save changes";
     cancel.hidden = false;
@@ -146,6 +192,14 @@ export async function mountScheduleTab(host) {
     const what = document.createElement("td");
     what.className = "what";
     what.textContent = item.title ?? "";
+    if (item.abstractId) {
+      const link = document.createElement("a");
+      link.href = abstractListLink(item.abstractId);
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "abstract ↗";
+      what.append(" — ", link);
+    }
 
     const who = document.createElement("td");
     who.textContent = [item.speaker, item.affiliation].filter(Boolean).join(" — ");
@@ -238,6 +292,7 @@ export async function mountScheduleTab(host) {
     // Absent rather than empty: `session` is optional in firestore.rules, and a
     // stored "" would have to be special-cased by every reader.
     if (sessionSelect.value) data.session = sessionSelect.value;
+    if (abstractSelect.value) data.abstractId = abstractSelect.value;
 
     save.disabled = true;
     try {
@@ -254,7 +309,14 @@ export async function mountScheduleTab(host) {
   });
 
   cancel.addEventListener("click", resetForm);
+  fillAbstractOptions([]);
   resetForm();
+
+  try {
+    fillAbstractOptions(await listPublicAbstracts());
+  } catch (err) {
+    console.error("[pints] listPublicAbstracts", err);
+  }
 
   try {
     await render();

@@ -5,7 +5,8 @@ import {
   getMyAbstract, getPublicAbstract, getSiteConfig, listPublicAbstracts, retractAbstract,
 } from "./db.js";
 import {
-  filterAbstracts, groupByTopic, retractQuestion, sortPublicAbstracts, submissionWindows,
+  abstractAnchor, filterAbstracts, groupByTopic, retractQuestion, sortPublicAbstracts,
+  submissionWindows,
 } from "./abstract-utils.mjs";
 import { abstractCard, abstractDisclosure, abstractPermalink } from "./abstract-card.js";
 import { mountSubmissionCard } from "./submission-view.js";
@@ -209,14 +210,36 @@ async function mountList() {
       count.className = "muted";
       count.textContent = ` ${group.items.length}`;
       h2.append(count);
-      nodes.push(h2, ...group.items.map((a) =>
-        abstractDisclosure(a, { permalink: abstractPermalink(a.id) })));
+      nodes.push(h2, ...group.items.map((a) => {
+        const row = abstractDisclosure(a, { permalink: abstractPermalink(a.id) });
+        row.id = abstractAnchor(a.id);
+        return row;
+      }));
     }
     listEl.replaceChildren(...nodes);
     // A redraw destroys every open row, so the control must not still say
     // "Collapse all".
     expandAll(false);
     toggleAll.hidden = !shown.length;
+  };
+
+  // #abstract-<id>, which is how the program links a talk: open that row and
+  // bring it into view. The browser's own jump to the hash fires before the
+  // list exists, so it is done here, after the draw. A filter that hides the
+  // row is cleared rather than leaving the link to land on nothing.
+  const reveal = () => {
+    const id = decodeURIComponent(location.hash.slice(1));
+    if (!id) return;
+    let row = document.getElementById(id);
+    if (!row && (queryEl.value || topicEl.value)) {
+      queryEl.value = "";
+      topicEl.value = "";
+      draw();
+      row = document.getElementById(id);
+    }
+    if (!(row instanceof HTMLDetailsElement)) return;
+    row.open = true;
+    row.scrollIntoView({ block: "start" });
   };
 
   try {
@@ -226,8 +249,10 @@ async function mountList() {
       msg.textContent = "No abstracts have been accepted yet.";
     }
     draw();
+    reveal();
     queryEl.addEventListener("input", draw);
     topicEl.addEventListener("change", draw);
+    window.addEventListener("hashchange", reveal);
   } catch (err) {
     msg.className = "msg err";
     msg.textContent = "Could not load the abstract list.";

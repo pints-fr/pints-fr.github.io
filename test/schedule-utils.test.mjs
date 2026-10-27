@@ -5,6 +5,7 @@ import {
   formatTimeRange,
   groupScheduleBySession,
   parseTime,
+  programAbstractLinks,
   romanNumeral,
   sortScheduleItems,
 } from "../js/schedule-utils.mjs";
@@ -141,4 +142,22 @@ test("groupScheduleBySession treats an unknown or missing session as none", () =
 
 test("groupScheduleBySession handles an empty program", () => {
   assert.deepEqual(groupScheduleBySession([]), []);
+});
+
+test("programAbstractLinks prefers explicit links, then matches talk titles", () => {
+  const published = [
+    { id: "a1", type: "talk", title: "Grid cells in  the dark" },
+    { id: "a2", type: "poster", title: "A poster" },
+    { id: "a3", type: "talk", title: "Twin" },
+    { id: "a4", type: "talk", title: "twin" },
+  ];
+  const links = programAbstractLinks([
+    { id: "s1", kind: "talk", title: "grid cells in the dark" },
+    { id: "s2", kind: "talk", title: "A poster" },
+    { id: "s3", kind: "keynote", title: "Grid cells in the dark" },
+    { id: "s4", kind: "other", title: "Anything", abstractId: "a2" },
+    { id: "s5", kind: "talk", title: "Twin" },
+    { id: "s6", kind: "talk", title: "Grid cells in the dark", abstractId: "gone" },
+  ], published);
+  assert.deepEqual([...links], [["s1", "a1"], ["s4", "a2"]]);
 });

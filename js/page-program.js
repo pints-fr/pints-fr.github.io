@@ -1,11 +1,13 @@
 import { mountLayout, setAuthLink } from "./layout.js";
 import { warnIfUnconfigured } from "./firebase.js";
 import { onUser } from "./auth.js";
-import { getSiteConfig, listSchedule } from "./db.js";
+import { getSiteConfig, listPublicAbstracts, listSchedule } from "./db.js";
+import { abstractListLink } from "./abstract-utils.mjs";
 import {
   formatDayHeading,
   formatTimeRange,
   groupScheduleBySession,
+  programAbstractLinks,
 } from "./schedule-utils.mjs";
 
 mountLayout();
@@ -14,7 +16,7 @@ onUser(({ user, isAdmin }) => setAuthLink({ signedIn: Boolean(user), isAdmin }))
 const programEl = document.getElementById("program");
 const msg = document.getElementById("msg");
 
-function itemRow(item) {
+function itemRow(item, links) {
   const tr = document.createElement("tr");
   tr.className = `kind-${item.kind ?? "other"}`;
 
@@ -25,7 +27,17 @@ function itemRow(item) {
   const what = document.createElement("td");
   what.className = "what";
   // textContent: organizer-entered, but still never trusted into innerHTML.
-  what.textContent = item.title ?? "";
+  // A talk carries a link to its abstract on its title, which opens it in
+  // place on the abstracts page.
+  const abstractId = links.get(item.id);
+  if (abstractId) {
+    const link = document.createElement("a");
+    link.href = abstractListLink(abstractId);
+    link.textContent = item.title ?? "";
+    what.append(link);
+  } else {
+    what.textContent = item.title ?? "";
+  }
   if (item.kind === "keynote") {
     const pill = document.createElement("span");
     pill.className = "pill";
@@ -66,7 +78,7 @@ function sessionHead(block) {
   return tr;
 }
 
-function programTable(items) {
+function programTable(items, links) {
   const wrap = document.createElement("div");
   wrap.className = "table-scroll";
   const table = document.createElement("table");
@@ -85,11 +97,11 @@ function programTable(items) {
       const body = document.createElement("tbody");
       body.className = `session session-${block.session}`;
       body.append(sessionHead(block));
-      for (const item of block.items) body.append(itemRow(item));
+      for (const item of block.items) body.append(itemRow(item, links));
       table.append(body);
     } else {
       if (!loose) table.append(loose = document.createElement("tbody"));
-      loose.append(itemRow(block.item));
+      loose.append(itemRow(block.item, links));
     }
   }
 
@@ -101,7 +113,15 @@ if (!warnIfUnconfigured(msg)) {
   try {
     // One day, one table. The date is a single site setting rather than a field
     // on every item, so it cannot drift between rows.
-    const [config, items] = await Promise.all([getSiteConfig(), listSchedule()]);
+    // The abstracts are only for linking talks, so a failure there costs the
+    // links, not the program.
+    const [config, items, published] = await Promise.all([
+      getSiteConfig(), listSchedule(),
+      listPublicAbstracts().catch((err) => {
+        console.error("[pints] program abstracts", err);
+        return [];
+      }),
+    ]);
 
     if (!items.length) {
       msg.className = "msg warn";
@@ -112,7 +132,7 @@ if (!warnIfUnconfigured(msg)) {
         h2.textContent = formatDayHeading(config.eventDate);
         programEl.append(h2);
       }
-      programEl.append(programTable(items));
+      programEl.append(programTable(items, programAbstractLinks(items, published)));
     }
   } catch (err) {
     msg.className = "msg err";

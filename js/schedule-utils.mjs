@@ -104,3 +104,34 @@ export function groupScheduleBySession(items) {
   }
   return blocks;
 }
+
+const titleKey = (title) => String(title ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+
+/**
+ * Which published abstract each program item presents, as `Map<itemId,
+ * abstractId>`.
+ *
+ * An organizer's explicit link wins. Otherwise a talk is matched to a published
+ * talk with the same title, ignoring case and spacing, so a program typed in
+ * before the links existed still points somewhere. Only an unambiguous match
+ * counts: two talks sharing a title would make any guess a wrong link half the
+ * time. An explicit link to an abstract no longer published is dropped, since
+ * it would land on nothing.
+ */
+export function programAbstractLinks(items, published) {
+  const live = new Set((published ?? []).map((a) => a.id));
+  const byTitle = new Map();
+  for (const a of published ?? []) {
+    if (a?.type !== "talk") continue;
+    const key = titleKey(a.title);
+    byTitle.set(key, byTitle.has(key) ? null : a.id);
+  }
+  const links = new Map();
+  for (const item of items ?? []) {
+    const id = item?.abstractId
+      ? (live.has(item.abstractId) ? item.abstractId : null)
+      : item?.kind === "talk" ? byTitle.get(titleKey(item.title)) : null;
+    if (id) links.set(item.id, id);
+  }
+  return links;
+}

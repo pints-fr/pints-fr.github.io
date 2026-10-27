@@ -414,6 +414,43 @@ export async function republishAll(editClosed) {
 }
 
 /**
+ * Accept many abstracts as posters at once: for each, the same three writes the
+ * card's Accept button makes (status, public copy, who decided). `entries` is
+ * `[{ abstract, posterNumber }]`; `editClosed` is passed through to the public
+ * copy exactly as the single Accept passes it.
+ *
+ * 150 abstracts per batch keeps the 450 writes under Firestore's 500 cap. A
+ * failure part-way leaves the earlier batches committed, which is safe: each
+ * abstract is accepted completely or not at all, and pressing the button again
+ * picks up whatever is still in review.
+ */
+export async function publishAbstracts(entries, decidedBy, { editClosed = false } = {}) {
+  for (let i = 0; i < entries.length; i += 150) {
+    const batch = writeBatch(db);
+    for (const { abstract, posterNumber } of entries.slice(i, i + 150)) {
+      batch.update(doc(db, "abstracts", abstract.id),
+        { status: "accepted", updatedAt: serverTimestamp() });
+      batch.set(doc(db, "abstracts_public", abstract.id),
+        publicAbstract(abstract, { type: "poster", posterNumber, editClosed }));
+      batch.set(doc(db, "abstract_reviews", abstract.id),
+        { decidedBy, decidedAt: serverTimestamp() }, { merge: true });
+    }
+    await batch.commit();
+  }
+}
+
+/** Rewrite board numbers on published posters. `assignments` is `[{ id, posterNumber }]`. */
+export async function setPosterNumbers(assignments) {
+  for (let i = 0; i < assignments.length; i += 500) {
+    const batch = writeBatch(db);
+    for (const { id, posterNumber } of assignments.slice(i, i + 500)) {
+      batch.update(doc(db, "abstracts_public", id), { posterNumber });
+    }
+    await batch.commit();
+  }
+}
+
+/**
  * Un-accept: take the abstract off the public list and put it back in review.
  *
  * This used to write a `withdrawn` status, which existed only to be the result

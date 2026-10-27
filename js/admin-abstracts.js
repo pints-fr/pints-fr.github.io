@@ -2,8 +2,9 @@ import {
   ABSTRACT_STATUSES, ABSTRACT_TOPICS, ABSTRACT_TYPES, STATUS_LABELS, TOPIC_LABELS,
 } from "./config.mjs";
 import {
-  authorLineParts, filterAdminAbstracts, groupByTopic, nextPosterNumber,
-  submissionStatusLabel, submissionWindows, summaryAuthorLine,
+  authorLineParts, displayOrder, filterAdminAbstracts, groupByTopic, inReview,
+  nextPosterNumber, posterNumbering, submissionStatusLabel, submissionWindows,
+  summaryAuthorLine,
 } from "./abstract-utils.mjs";
 import { disclosureShell, statusPill } from "./abstract-card.js";
 import {
@@ -31,10 +32,12 @@ import {
   listReviews,
   listUsers,
   publishAbstract,
+  publishAbstracts,
   recordDecision,
   saveMyReview,
   saveSiteConfig,
   setAbstractStatus,
+  setPosterNumbers,
   returnToReview,
 } from "./db.js";
 
@@ -94,6 +97,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
       other organizers' reviews are hidden, and only your own score is shown.</p>
     <div id="adm-filters" class="filters"></div>
     <div class="actions" id="adm-exports"></div>
+    <div class="actions" id="adm-bulk"></div>
     <p id="adm-summary" class="muted"></p>
     <p id="adm-empty" class="msg warn" hidden></p>
     <div id="adm-list"></div>`;
@@ -139,6 +143,8 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
   // What the last render fetched. The export buttons read it rather than
   // re-fetching, so what lands in the spreadsheet is exactly what is on screen.
   let shown = [];
+  let annotated = [];
+  let published = [];
   let reviewsById = new Map();
   let reviewers = [];
   let labels = new Map();
@@ -183,6 +189,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
 
   buildFilters();
   buildExports();
+  const bulk = buildBulkActions();
 
   function buildFilters() {
     const bar = host.querySelector("#adm-filters");
@@ -356,6 +363,93 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     say(`Deleted ${result.reviews} review${result.reviews === 1 ? "" : "s"} `
       + `on ${result.abstracts} abstract${result.abstracts === 1 ? "" : "s"}.`, "warn");
     await render();
+  }
+
+  /**
+   * The decision-meeting shortcuts. Both act on what the last render drew, and
+   * both are hidden in reviewer mode, like the per-card Accept: scoring is not
+   * deciding.
+   */
+  function buildBulkActions() {
+    const bar = host.querySelector("#adm-bulk");
+
+    const run = async (button, fn) => {
+      button.disabled = true;
+      try {
+        await fn();
+        await render();
+      } catch (err) {
+        say(`Could not ${button.textContent.toLowerCase()}.`, "err");
+        console.error("[pints] admin bulk", err);
+      } finally {
+        button.disabled = false;
+      }
+    };
+
+    const confirmed = async (title, message, label) => (await confirmChoice({
+      title,
+      message,
+      choices: [
+        { value: "go", label },
+        { value: "cancel", label: "Cancel", className: "secondary" },
+      ],
+    })) === "go";
+
+    // Only the abstracts on screen, like the exports: filter to a topic and this
+    // accepts that topic. Numbered after the last board already in use, in the
+    // order shown, so an earlier acceptance keeps its number.
+    const acceptAll = document.createElement("button");
+    acceptAll.id = "adm-accept-all";
+    acceptAll.addEventListener("click", () => run(acceptAll, async () => {
+      const pending = displayOrder(inReview(shown), ABSTRACT_TOPICS);
+      if (!pending.length) return;
+      const numbers = posterNumbering(pending, nextPosterNumber(published));
+      const first = numbers[0].posterNumber;
+      const last = numbers.at(-1).posterNumber;
+      const ok = await confirmed("Accept as posters",
+        `Accept the ${pending.length} abstract${pending.length === 1 ? "" : "s"} still in review `
+        + `that ${pending.length === 1 ? "is" : "are"} shown, as posters `
+        + `${first === last ? `P${first}` : `P${first}–P${last}`}, and publish them? `
+        + "Talks can still be promoted one by one afterwards.",
+        "Accept and publish");
+      if (!ok) return;
+      await publishAbstracts(pending.map((abstract, i) => ({
+        abstract, posterNumber: numbers[i].posterNumber,
+      })), adminUid, { editClosed });
+      say(`Accepted ${pending.length} as posters (${first === last ? `P${first}` : `P${first}–P${last}`}).`, "ok");
+    }));
+
+    // Every accepted poster, not just those shown: renumbering a filtered subset
+    // from 1 would hand out numbers the hidden posters still hold.
+    const renumber = document.createElement("button");
+    renumber.className = "secondary";
+    renumber.id = "adm-renumber";
+    renumber.textContent = "Renumber posters in this order";
+    renumber.title = "Give every accepted poster a board number, P1 upwards, "
+      + "topic by topic in the current sort order";
+    renumber.addEventListener("click", () => run(renumber, async () => {
+      const posters = displayOrder(
+        sortShown(annotated.filter((a) => a.status === "accepted" && a.publicType === "poster")),
+        ABSTRACT_TOPICS);
+      if (!posters.length) return;
+      const ok = await confirmed("Renumber posters",
+        `Renumber all ${posters.length} accepted posters P1–P${posters.length}, topic by topic `
+        + "in the current sort order? Filters are ignored, and existing board numbers change.",
+        "Renumber");
+      if (!ok) return;
+      await setPosterNumbers(posterNumbering(posters));
+      say(`Renumbered ${posters.length} posters, P1–P${posters.length}.`, "ok");
+    }));
+
+    bar.append(acceptAll, renumber);
+
+    return function sync() {
+      const pending = inReview(shown).length;
+      acceptAll.textContent = `Accept ${pending} in review as posters`;
+      acceptAll.hidden = blind || pending === 0;
+      renumber.hidden = blind
+        || !annotated.some((a) => a.status === "accepted" && a.publicType === "poster");
+    };
   }
 
   /**
@@ -834,10 +928,11 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
   async function render() {
     // One read each for the whole page, joined in memory — far cheaper than a
     // per-card lookup, and it is what lets a card draw its reviews synchronously.
-    const [abstracts, published, users, reviews, admins, config] = await Promise.all([
+    const [abstracts, publicCopies, users, reviews, admins, config] = await Promise.all([
       listAbstracts(), listPublicAbstracts(), listUsers(), listReviews(), listAdmins(),
       getSiteConfig(),
     ]);
+    published = publicCopies;
 
     blind = config?.reviewerMode === true;
     editClosed = !submissionWindows(config).editOpen;
@@ -855,7 +950,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     reviewers = reviewerList(admins, usersById);
     labels = reviewerLabels(reviewers, reviewsById);
 
-    const annotated = annotateAbstracts(abstracts, { published, users });
+    annotated = annotateAbstracts(abstracts, { published, users });
     // Sorted before grouping: groupByTopic preserves input order, so ordering
     // the flat list here is what orders each topic. The exports read `shown`,
     // so a CSV comes out in the order on screen.
@@ -898,6 +993,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     }
 
     syncToggleAll();
+    bulk();
 
     emptyEl.textContent = !abstracts.length ? "No abstracts have been submitted yet."
       : !shown.length ? "No abstracts match these filters."

@@ -2,12 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   authorLineParts,
+  displayOrder,
   draftFingerprint,
   filterAbstracts,
   filterAdminAbstracts,
   groupByTopic,
+  inReview,
   nextPosterNumber,
   ownerCan,
+  posterNumbering,
+  presenterOf,
   publicFields,
   publicMode,
   sortPublicAbstracts,
@@ -452,4 +456,46 @@ test("publicFields never carries the figure, and carries the body only in full m
     assert.equal(fields.body, mode === "full" ? abstract.body : null);
     assert.equal(fields.title, abstract.title);
   }
+});
+
+test("displayOrder flattens topic groups, keeping order within each and Other last", () => {
+  const list = [
+    { id: "x", topic: "nope" },
+    { id: "s1", topic: "systems" },
+    { id: "c1", topic: "cognitive" },
+    { id: "s2", topic: "systems" },
+  ];
+  assert.deepEqual(
+    displayOrder(list, ["cognitive", "systems"]).map((a) => a.id),
+    ["c1", "s1", "s2", "x"]);
+});
+
+test("inReview keeps undecided abstracts, including a legacy withdrawn", () => {
+  const list = [
+    { id: "a", status: "accepted" },
+    { id: "r", status: "rejected" },
+    { id: "s", status: "submitted" },
+    { id: "w", status: "withdrawn" },
+  ];
+  assert.deepEqual(inReview(list).map((a) => a.id), ["s", "w"]);
+  assert.deepEqual(inReview(null), []);
+});
+
+test("posterNumbering numbers consecutively from start", () => {
+  assert.deepEqual(posterNumbering([{ id: "a" }, { id: "b" }]),
+    [{ id: "a", posterNumber: 1 }, { id: "b", posterNumber: 2 }]);
+  assert.deepEqual(posterNumbering([{ id: "a" }], 7), [{ id: "a", posterNumber: 7 }]);
+});
+
+test("presenterOf picks the presenting author and their first affiliation", () => {
+  assert.deepEqual(presenterOf({
+    affiliations: ["ENS", "Institut Pasteur"],
+    authors: [
+      { name: "Ana", affiliationIndexes: [0] },
+      { name: " Bo ", affiliationIndexes: [1, 0], presenting: true },
+    ],
+  }), { speaker: "Bo", affiliation: "Institut Pasteur" });
+  assert.deepEqual(presenterOf({ authors: [{ name: "Ana" }] }),
+    { speaker: "Ana", affiliation: "" });
+  assert.deepEqual(presenterOf({}), { speaker: "", affiliation: "" });
 });

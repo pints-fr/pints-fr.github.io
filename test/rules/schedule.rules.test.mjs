@@ -90,3 +90,8 @@ test("day, location, and order are no longer accepted", async () => {
   await assertFails(setDoc(doc(fs, "schedule", "s1"), item({ location: "Amphi A" })));
   await assertFails(setDoc(doc(fs, "schedule", "s1"), item({ order: 0 })));
 });
+test("an admin can link a program item to an abstract", async () => {
+  await seedAdmin(env, "boss");
+  await assertSucceeds(setDoc(doc(asUser(env, "boss"), "schedule", "s1"),
+    item({ kind: "talk", abstractId: "alice" })));
+});

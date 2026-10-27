@@ -121,6 +121,45 @@ export function groupByTopic(list, topics) {
 }
 
 /**
+ * The flat order the review console draws: topic by topic, each topic in the
+ * order it was given. Board numbers follow this, so P1, P2… read down the
+ * screen the committee was looking at when it pressed the button.
+ */
+export function displayOrder(list, topics) {
+  return groupByTopic(list, topics).flatMap((group) => group.items);
+}
+
+/**
+ * Everything the committee has not decided on. Mirrors the console's "in
+ * review" count, which also sweeps up a legacy `withdrawn`.
+ */
+export function inReview(list) {
+  return (list ?? []).filter((a) => a?.status !== "accepted" && a?.status !== "rejected");
+}
+
+/** Consecutive board numbers from `start`, in list order. */
+export function posterNumbering(list, start = 1) {
+  return (list ?? []).map((a, i) => ({ id: a.id, posterNumber: start + i }));
+}
+
+/**
+ * Speaker and affiliation for a program slot linked to an abstract: the
+ * presenting author (the first author when nobody is marked) and their first
+ * affiliation. Empty strings rather than undefined, so a form can take them
+ * as they are.
+ */
+export function presenterOf(abstract) {
+  const authors = (abstract?.authors ?? []).filter((a) => String(a?.name ?? "").trim());
+  const lead = authors.find((a) => a?.presenting) ?? authors[0];
+  if (!lead) return { speaker: "", affiliation: "" };
+  const index = (lead.affiliationIndexes ?? [])[0];
+  return {
+    speaker: String(lead.name).trim(),
+    affiliation: String(abstract.affiliations?.[index] ?? "").trim(),
+  };
+}
+
+/**
  * A stable string standing in for the editable content of one draft.
  *
  * The account page has to know whether an open editor holds unsaved work before
@@ -287,3 +326,11 @@ export function retractQuestion(abstract, windows) {
     + (windows?.submitOpen ? "" : "Submissions are closed, so you can’t submit a new one. ")
     + "This cannot be undone.";
 }
+
+/**
+ * The id a row of the public list carries, and the link that opens it there.
+ * A hash rather than ?a=: it lands on the row in its place among the others,
+ * which is what the program wants — a talk read alongside its session.
+ */
+export const abstractAnchor = (id) => `abstract-${id}`;
+export const abstractListLink = (id) => `abstracts.html#${encodeURIComponent(abstractAnchor(id))}`;
