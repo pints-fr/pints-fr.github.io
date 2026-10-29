@@ -417,6 +417,56 @@ service cloud.firestore {
         && !existsAfter(/databases/$(database)/documents/abstracts/$(abstractId));
     }
 
+    // Whether the best-poster vote is open, from config/site.votingOpen. Fails
+    // CLOSED, unlike registrationOpen(): a vote is something organizers open
+    // on the day, so a config written before the switch existed means "not
+    // yet". js/vote-utils.mjs votingOpen() reads it the same way.
+    function votingOpen() {
+      let path = /databases/$(database)/documents/config/site;
+      return exists(path) && get(path).data.get('votingOpen', false) == true;
+    }
+
+    // The best-poster vote. ONE per participant, for the same reason there is
+    // one abstract per participant: the document id IS the voter's uid, so a
+    // second vote has nowhere to go and changing your mind is an overwrite.
+    //
+    // "Not your own poster" is a plain inequality because an abstract's id —
+    // and its public copy's — is its submitter's uid. That covers the
+    // submitter only: co-authors are names on the abstract, not accounts, so
+    // there is nothing here to compare them against.
+    //
+    // Registered means a confirmed address AND a users/ profile, the same pair
+    // that puts somebody on the participant list; a bare Auth account made
+    // around register.html cannot vote. Only accepted posters of this edition
+    // are candidates — talks have the programme already.
+    //
+    // updatedAt is pinned to request.time so the admin's "who voted when" is
+    // the server's clock, not the voter's.
+    //
+    // `list` is organizers only: who voted for whom is theirs to see, and a
+    // voter reads their own ballot with a direct get.
+    match /poster_votes/{uid} {
+      allow get: if isOwner(uid) || isAdmin();
+      allow list: if isAdmin();
+      allow create, update: if isVerified() && isOwner(uid) && votingOpen()
+        && exists(/databases/$(database)/documents/users/$(uid))
+        && request.resource.data.keys().hasOnly(['posterId', 'edition', 'updatedAt'])
+        && request.resource.data.keys().hasAll(['posterId', 'edition', 'updatedAt'])
+        && str(request.resource.data.posterId, 128)
+        && request.resource.data.posterId != uid
+        && request.resource.data.edition is string
+        && request.resource.data.updatedAt == request.time
+        && exists(/databases/$(database)/documents/abstracts_public/$(request.resource.data.posterId))
+        && get(/databases/$(database)/documents/abstracts_public/$(request.resource.data.posterId))
+             .data.type == 'poster'
+        && get(/databases/$(database)/documents/abstracts_public/$(request.resource.data.posterId))
+             .data.edition == request.resource.data.edition;
+      // Withdrawing is allowed while the vote is open; after it closes the
+      // ballot is frozen for everybody but the organizers.
+      allow delete: if isOwner(uid) && votingOpen();
+      allow write: if isAdmin();
+    }
+
     // Editable page copy, written from the admin console so organizers do not
     // need a GitHub account to fix a typo. A missing document is not an error:
     // the site falls back to the markdown committed under content/.

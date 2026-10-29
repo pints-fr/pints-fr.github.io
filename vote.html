@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Best poster vote — PINTS</title>
+<meta name="description" content="Vote for the best poster at PINTS. Registered participants only, one vote each.">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<header id="site-header"></header>
+<main class="wrap">
+  <h1>Best poster vote</h1>
+  <p class="prose muted">Every registered participant has one vote. You cannot vote
+    for your own poster, and you can change your vote until voting closes.</p>
+
+  <div id="msg" class="msg" role="status" aria-live="polite"></div>
+  <p id="status"></p>
+  <form id="ballot" hidden>
+    <label for="q">Find a poster
+      <span class="hint">Board number, title, author or affiliation.</span>
+    </label>
+    <input id="q" type="text" autocomplete="off">
+    <fieldset>
+      <legend>Posters</legend>
+      <div id="choices" class="vote-choices"></div>
+    </fieldset>
+    <div class="actions">
+      <button type="submit" id="cast">Cast my vote</button>
+      <button type="button" id="withdraw" class="secondary" hidden>Withdraw my vote</button>
+    </div>
+  </form>
+</main>
+<footer id="site-footer"></footer>
+<script type="module" src="js/page-vote.js"></script>
+</body>
+</html>

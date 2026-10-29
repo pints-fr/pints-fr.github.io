@@ -534,6 +534,37 @@ figcaption { margin-top: .35rem; max-width: var(--measure); color: var(--muted);
 .topic-heading .muted { font-weight: 400; font-size: .9rem; }
 #expand-all { margin-bottom: 1rem; }
 
+/* The best-poster ballot (vote.html). The whole row is the label, so a thumb
+   on a phone at the poster session hits a target wider than the radio. The
+   current vote is tinted with the accent rather than coloured as a status: it
+   is the visitor's choice, not a decision about the poster. */
+.vote-choices { display: grid; gap: .35rem; margin-top: 1rem; }
+.vote-choice {
+  display: flex; align-items: flex-start; gap: .6rem; margin: 0;
+  padding: .5rem .75rem; border: 1px solid var(--line); border-radius: var(--radius);
+  font-weight: 400; cursor: pointer; text-align: left;
+}
+.vote-choice:hover { background: var(--bg-soft); }
+.vote-choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.vote-choice:has(input:disabled) { cursor: default; opacity: .6; }
+.vote-choice input { margin-top: .4rem; }
+.vote-choice > span { display: flex; flex-direction: column; }
+.vote-title { font-weight: 600; }
+.vote-authors { color: var(--muted); font-size: .92rem; }
+.vote-control { margin: .75rem 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.vote-mine { color: var(--accent); }
+.vote-banner a { font-weight: 600; }
+
+/* Admin voting tab: one bar per poster, the share of counted ballots. */
+.vote-stats { display: flex; flex-wrap: wrap; gap: .75rem; margin: 1rem 0; }
+.vote-stat { border: 1px solid var(--line); border-radius: var(--radius); padding: .6rem .9rem; min-width: 9rem; }
+.vote-stat strong { display: block; font-size: 1.5rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.vote-stat span { color: var(--muted); font-size: .85rem; }
+.vote-bar { display: block; height: .5rem; background: var(--accent); border-radius: 999px; min-width: 2px; }
+.vote-bar-track { display: block; width: 8rem; background: var(--bg-soft); border-radius: 999px; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vote-voters { margin: .25rem 0 0; padding-left: 1.1rem; color: var(--muted); font-size: .9rem; }
+
 /* Printing the abstract list should yield an abstract book. The rows are opened
    from a beforeprint handler rather than by a rule here — their bodies are built
    lazily, so there would otherwise be nothing for CSS to reveal. This only has

@@ -470,6 +470,54 @@ export async function listUsers() {
   return (await getDocs(q)).docs.map(snapData);
 }
 
+// ------------------------------------------------------------- poster vote
+//
+// poster_votes/{voterUid}: one ballot per participant, overwritten to change
+// it. firestore.rules decides who may vote for what; see js/vote-utils.mjs for
+// the client's mirror of it.
+
+/** The signed-in participant's ballot for this edition, or null. */
+export async function getMyVote(uid) {
+  const snap = await getDoc(doc(db, "poster_votes", uid));
+  if (!snap.exists()) return null;
+  const vote = snapData(snap);
+  return vote.edition === CURRENT_EDITION ? vote : null;
+}
+
+export const castVote = (uid, posterId) =>
+  setDoc(doc(db, "poster_votes", uid), {
+    posterId,
+    edition: CURRENT_EDITION,
+    // Pinned to request.time by the rules, so it must be the server's clock.
+    updatedAt: serverTimestamp(),
+  });
+
+export const clearMyVote = (uid) => deleteDoc(doc(db, "poster_votes", uid));
+
+/** Every ballot this edition. Admin-only, per the rules. */
+export async function listVotes() {
+  const q = query(collection(db, "poster_votes"), where("edition", "==", CURRENT_EDITION));
+  return (await getDocs(q)).docs.map((snap) => {
+    const vote = snapData(snap);
+    return { ...vote, updatedAt: vote.updatedAt?.toDate?.() ?? null };
+  });
+}
+
+/**
+ * Delete every ballot this edition. A batch holds 500 writes, which is more
+ * participants than PINTS has, but chunk anyway so a big year cannot fail half
+ * way through with a confusing error.
+ */
+export async function clearAllVotes() {
+  const votes = await listVotes();
+  for (let i = 0; i < votes.length; i += 450) {
+    const batch = writeBatch(db);
+    for (const vote of votes.slice(i, i + 450)) batch.delete(doc(db, "poster_votes", vote.id));
+    await batch.commit();
+  }
+  return votes.length;
+}
+
 // ------------------------------------------------------------------ contact
 
 /**

@@ -155,11 +155,14 @@ function figureEl(abstract) {
  *   statusLabel  a pill above the title ("In review", "Accepted as a talk")
  *   permalink    href for a "Link to this abstract" control
  *   headingLevel "h1" for a page that is one abstract, "h3" inside a list
+ *   extra        a node appended last, for a page's own controls (the
+ *                best-poster vote button)
  */
 export function abstractCard(abstract, {
   statusLabel = null,
   permalink = null,
   headingLevel = "h3",
+  extra = null,
 } = {}) {
   const article = document.createElement("article");
   article.className = "card";
@@ -173,6 +176,7 @@ export function abstractCard(abstract, {
     bodyEl(abstract),
     figureEl(abstract),
   );
+  if (extra) article.append(extra);
   return article;
 }
 
@@ -211,8 +215,11 @@ export function disclosureShell({ summary, buildBody, className = "abstract" }) 
 /**
  * One abstract as a row of the public list: poster number or talk pill, title,
  * and the presenting author.
+ *
+ * `extra` returns a node for the end of the body. A function, because the body
+ * is built on first open and the node should be too.
  */
-export function abstractDisclosure(abstract, { permalink = null } = {}) {
+export function abstractDisclosure(abstract, { permalink = null, extra = null } = {}) {
   const title = document.createElement("span");
   title.className = "summary-title";
   title.append(...headingParts(abstract));
@@ -242,6 +249,8 @@ export function abstractDisclosure(abstract, { permalink = null } = {}) {
         // pill here would repeat it on every row of that group.
         metaEl(abstract, { statusLabel: null, permalink, topic: false }),
       );
+      const tail = extra?.();
+      if (tail) body.append(tail);
       return body;
     },
   });

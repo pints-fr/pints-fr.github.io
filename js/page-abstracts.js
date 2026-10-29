@@ -14,6 +14,9 @@ import { deleteFigure } from "./storage.js";
 import { ABSTRACT_TOPICS, SITE_NAME, TOPIC_LABELS } from "./config.mjs";
 import { hydrateMarkdownHosts } from "./content-hydrate.js";
 import { withNext } from "./redirect-utils.mjs";
+import {
+  ballotBlockedText, ballotStatusText, loadBallot, voteControl, voteErrorText,
+} from "./vote-actions.js";
 
 mountLayout();
 
@@ -29,6 +32,7 @@ const submitPanelEl = document.getElementById("submit-panel");
 const submitCtaBlockEl = document.getElementById("submit-cta-block");
 const submitCta = document.getElementById("submit-cta");
 const myAbstractEl = document.getElementById("my-abstract");
+const voteBannerEl = document.getElementById("vote-banner");
 
 // onAuthStateChanged can fire more than once (sign-out elsewhere, a token
 // refresh), so this has to be a full re-render, not a one-way reveal — or a
@@ -37,7 +41,81 @@ let submitPanelToken = 0;
 onUser(({ user, isAdmin }) => {
   setAuthLink({ signedIn: Boolean(user), isAdmin });
   renderSubmitPanel(user).catch((err) => console.error("[pints] submit panel", err));
+  refreshBallot(user).catch((err) => console.error("[pints] ballot", err));
 });
+
+// ------------------------------------------------------- best-poster vote
+//
+// One of two demo homes for the vote (the other is vote.html); everything it
+// writes goes through vote-actions.js. Controls sit in slots that are refilled
+// in place, so casting a vote does not redraw the list and collapse the row the
+// visitor is reading.
+
+let ballot = null;
+let ballotToken = 0;
+// The posters this page has loaded, for naming the visitor's current vote.
+let listed = [];
+
+async function refreshBallot(user) {
+  const token = ++ballotToken;
+  const next = await loadBallot(user);
+  if (token !== ballotToken) return; // superseded by a later auth state
+  ballot = next;
+  renderVoteBanner();
+  refreshVoteSlots();
+}
+
+function renderVoteBanner() {
+  if (!ballot?.open) {
+    voteBannerEl.hidden = true;
+    return;
+  }
+  voteBannerEl.hidden = false;
+  voteBannerEl.className = `msg vote-banner ${ballot.reason ? "warn" : "ok"}`;
+  const link = document.createElement("a");
+  if (ballot.reason === "signedOut") {
+    link.href = withNext("login.html", "vote.html");
+    link.textContent = "Sign in to vote";
+  } else {
+    link.href = "vote.html";
+    link.textContent = "Open the ballot";
+  }
+  voteBannerEl.replaceChildren(
+    "Voting for the best poster is open. ",
+    ballot.reason ? ballotBlockedText(ballot.reason) : ballotStatusText(ballot, listed),
+    " ",
+    ...(ballot.reason && ballot.reason !== "signedOut" ? [] : [link]),
+  );
+}
+
+/** An empty holder for one abstract's vote control, filled by refreshVoteSlots. */
+function voteSlot(abstract) {
+  const slot = document.createElement("div");
+  slot.className = "vote-slot";
+  slot.voteFor = abstract;
+  fillVoteSlot(slot);
+  return slot;
+}
+
+function fillVoteSlot(slot) {
+  const control = voteControl(slot.voteFor, ballot, {
+    onChange: () => {
+      msg.className = "msg";
+      msg.textContent = "";
+      renderVoteBanner();
+      refreshVoteSlots();
+    },
+    onError: (err) => {
+      msg.className = "msg err";
+      msg.textContent = voteErrorText(err);
+    },
+  });
+  slot.replaceChildren(...(control ? [control] : []));
+}
+
+function refreshVoteSlots() {
+  for (const slot of document.querySelectorAll(".vote-slot")) fillVoteSlot(slot);
+}
 
 async function renderSubmitPanel(user) {
   const token = ++submitPanelToken;
@@ -139,8 +217,9 @@ async function mountOne(id) {
     headingEl.remove();
     // The tab and any link preview should name the abstract, not the section.
     document.title = `${abstract.title ?? "Abstract"} — ${SITE_NAME}`;
+    listed = [abstract];
     listEl.replaceChildren(
-      abstractCard(abstract, { headingLevel: "h1" }),
+      abstractCard(abstract, { headingLevel: "h1", extra: voteSlot(abstract) }),
       backLink(),
     );
   } catch (err) {
@@ -215,7 +294,10 @@ async function mountList() {
       count.textContent = ` ${group.items.length}`;
       h2.append(count);
       nodes.push(h2, ...group.items.map((a) => {
-        const row = abstractDisclosure(a, { permalink: abstractPermalink(a.id) });
+        const row = abstractDisclosure(a, {
+          permalink: abstractPermalink(a.id),
+          extra: () => voteSlot(a),
+        });
         row.id = abstractAnchor(a.id);
         return row;
       }));
@@ -248,6 +330,8 @@ async function mountList() {
 
   try {
     all = sortPublicAbstracts(await listPublicAbstracts());
+    listed = all;
+    renderVoteBanner();
     if (!all.length) {
       msg.className = "msg warn";
       msg.textContent = "No abstracts have been accepted yet.";
