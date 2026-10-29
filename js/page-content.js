@@ -7,6 +7,7 @@ import { heroPhotos } from "./hero-utils.mjs";
 import { withNext } from "./redirect-utils.mjs";
 import { isRegistrationOpen } from "./registration-utils.mjs";
 import { submissionWindows } from "./abstract-utils.mjs";
+import { votingOpen } from "./vote-utils.mjs";
 import { EVENT } from "./config.mjs";
 import { googleCalendarUrl, outlookCalendarUrl, icsContent } from "./calendar-utils.mjs";
 import { download } from "./download.js";
@@ -49,15 +50,22 @@ async function updateSubmitCta(user) {
 }
 
 // The home page's "Register" and "Submit an abstract" buttons, each taken down
-// while its window is closed. Not awaited: they are two buttons, and the page
-// copy should not wait on them. A failed read leaves both up, and the pages
-// behind them say they are closed.
+// while its window is closed. Not awaited: they are buttons, and the page copy
+// should not wait on them. A failed read leaves both up, and the pages behind
+// them say they are closed.
+//
+// "Vote for the best poster" works the other way round: it starts hidden and
+// only appears while voting is open, so a failed read never advertises a vote
+// that is not happening. A signed-out visitor is sent to sign in by vote.html
+// itself, the same way submit.html does it.
 const registerCta = document.getElementById("register-cta");
-if (registerCta || submitCta) {
+const voteCta = document.getElementById("vote-cta");
+if (registerCta || submitCta || voteCta) {
   getSiteConfig()
     .then((config) => {
       if (registerCta) registerCta.hidden = !isRegistrationOpen(config);
       if (submitCta) submitCta.hidden = !submissionWindows(config).submitOpen;
+      if (voteCta) voteCta.hidden = !votingOpen(config);
     })
     .catch((err) => console.error("[pints] home ctas", err));
 }
