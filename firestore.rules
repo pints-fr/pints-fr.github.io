@@ -151,8 +151,8 @@ service cloud.firestore {
     function publicMatches(pub, priv) {
       let mode = expectedMode(priv);
       return pub.keys().hasOnly(['title', 'affiliations', 'authors', 'topic', 'body',
-                                 'publishMode', 'type', 'posterNumber', 'edition',
-                                 'acceptedAt'])
+                                 'publishMode', 'type', 'posterSession', 'posterNumber',
+                                 'edition', 'acceptedAt'])
         && pub.title == priv.title
         && pub.authors == priv.authors
         && pub.affiliations == priv.affiliations
@@ -165,7 +165,8 @@ service cloud.firestore {
     // no manual rank: `start` is the whole ordering.
     function validScheduleItem(data) {
       return data.keys().hasOnly(['edition', 'start', 'end', 'title', 'speaker',
-                                  'affiliation', 'kind', 'session', 'abstractId'])
+                                  'affiliation', 'kind', 'session', 'abstractId',
+                                  'posterSession'])
         && data.keys().hasAll(['edition', 'title', 'kind'])
         && data.edition is string
         && str(data.title, 200)
@@ -174,7 +175,9 @@ service cloud.firestore {
         // vocabulary matches ABSTRACT_TOPICS plus the invited block, because a
         // session is what a topic becomes once it is scheduled.
         && (!('session' in data)
-            || data.session in ['cognitive', 'systems', 'computational', 'keynote']);
+            || data.session in ['cognitive', 'systems', 'computational', 'keynote'])
+        // Which poster session a poster slot is: POSTER_SESSIONS in js/config.mjs.
+        && (!('posterSession' in data) || data.posterSession in [1, 2]);
     }
 
     // The home page hero photographs, config/hero. Checked even though the write
@@ -394,7 +397,8 @@ service cloud.firestore {
     // Its owner may rewrite it while the editing window is open, but only as
     // the other half of a batch that edits the private abstract: the content
     // must be what publicMatches() derives from that abstract, and the
-    // committee's half — type, board number, acceptance date — cannot move.
+    // committee's half — type, poster session, board number, acceptance date —
+    // cannot move.
     // They may delete it only when it is a poster, and only in the batch that
     // retracts the private abstract too.
     match /abstracts_public/{abstractId} {
@@ -405,6 +409,8 @@ service cloud.firestore {
         && request.resource.data.type == resource.data.type
         && request.resource.data.get('posterNumber', null)
             == resource.data.get('posterNumber', null)
+        && request.resource.data.get('posterSession', null)
+            == resource.data.get('posterSession', null)
         && request.resource.data.get('acceptedAt', null)
             == resource.data.get('acceptedAt', null)
         && request.resource.data.edition == resource.data.edition

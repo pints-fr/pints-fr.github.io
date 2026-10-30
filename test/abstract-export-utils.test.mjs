@@ -78,7 +78,8 @@ test("abstractExportRows fills every declared column", () => {
     assert.ok(column.key in row, `missing column ${column.key}`);
   }
   assert.equal(row.topic, "Systems", "the topic is the label, not the slug");
-  assert.equal(row.posterNumber, 7);
+  assert.equal(row.posterNumber, "P7");
+  assert.equal(row.posterSession, "");
   assert.equal(row.talkConsidered, "yes");
   assert.equal(row.affiliations, "1. ENS; 2. Sorbonne");
   assert.equal(row.createdAt, "2026-09-04");
@@ -171,4 +172,14 @@ test("stripAuthors makes a name search miss while the text still matches", () =>
   assert.equal(filterAbstracts([stripped], "Sorbonne").length, 0);
   assert.equal(filterAbstracts([stripped], "V1").length, 1);
   assert.equal(stripped.submitterEmail, "");
+});
+
+test("a poster in a session exports its session and board code", () => {
+  const annotated = annotateAbstracts([abstract()], {
+    published: [{ id: "alice", type: "poster", posterSession: 2, posterNumber: 7 }],
+  });
+  assert.equal(annotated[0].posterSession, 2);
+  const [row] = abstractExportRows(annotated);
+  assert.equal(row.posterSession, "Poster session 2");
+  assert.equal(row.posterNumber, "P2-7");
 });

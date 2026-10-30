@@ -2,12 +2,14 @@ import { mountLayout, setAuthLink } from "./layout.js";
 import { warnIfUnconfigured } from "./firebase.js";
 import { onUser } from "./auth.js";
 import { getSiteConfig, listPublicAbstracts, listSchedule } from "./db.js";
-import { abstractListLink } from "./abstract-utils.mjs";
+import { abstractListLink, posterSessionLink } from "./abstract-utils.mjs";
+import { POSTER_SESSION_LABELS } from "./config.mjs";
 import {
   formatDayHeading,
   formatTimeRange,
   groupScheduleBySession,
   programAbstractLinks,
+  programPosterSessions,
 } from "./schedule-utils.mjs";
 
 mountLayout();
@@ -16,7 +18,7 @@ onUser(({ user, isAdmin }) => setAuthLink({ signedIn: Boolean(user), isAdmin }))
 const programEl = document.getElementById("program");
 const msg = document.getElementById("msg");
 
-function itemRow(item, links) {
+function itemRow(item, { links, posterSessions }) {
   const tr = document.createElement("tr");
   tr.className = `kind-${item.kind ?? "other"}`;
 
@@ -44,10 +46,15 @@ function itemRow(item, links) {
     pill.textContent = "keynote";
     what.append(" ", pill);
   }
+  // A poster slot links to its own half of the posters when it is known which
+  // half that is, and to the whole list otherwise.
   if (item.kind === "poster") {
+    const session = posterSessions.get(item.id);
     const link = document.createElement("a");
-    link.href = "abstracts.html";
-    link.textContent = "see abstracts";
+    link.href = session ? posterSessionLink(session) : "abstracts.html";
+    link.textContent = session
+      ? `see ${POSTER_SESSION_LABELS[session]} abstracts`
+      : "see abstracts";
     what.append(" — ", link);
   }
   if (item.kind === "social") {
@@ -64,8 +71,11 @@ function itemRow(item, links) {
   return tr;
 }
 
-/** The banner row that opens a session: "Session II | Computational Neuroscience". */
-function sessionHead(block) {
+/**
+ * The banner row that opens a session: "Session II | Computational
+ * Neuroscience | chaired by: Name", the chair only once one is set.
+ */
+function sessionHead(block, chairs) {
   const tr = document.createElement("tr");
   tr.className = "session-head";
   const numeral = document.createElement("th");
@@ -74,11 +84,18 @@ function sessionHead(block) {
   const label = document.createElement("td");
   label.colSpan = 2;
   label.textContent = block.label;
+  const chair = String(chairs?.[block.session] ?? "").trim();
+  if (chair) {
+    const by = document.createElement("span");
+    by.className = "session-chair";
+    by.textContent = ` | chaired by: ${chair}`;
+    label.append(by);
+  }
   tr.append(numeral, label);
   return tr;
 }
 
-function programTable(items, links) {
+function programTable(items, { links, posterSessions, chairs }) {
   const wrap = document.createElement("div");
   wrap.className = "table-scroll";
   const table = document.createElement("table");
@@ -96,12 +113,12 @@ function programTable(items, links) {
       loose = null;
       const body = document.createElement("tbody");
       body.className = `session session-${block.session}`;
-      body.append(sessionHead(block));
-      for (const item of block.items) body.append(itemRow(item, links));
+      body.append(sessionHead(block, chairs));
+      for (const item of block.items) body.append(itemRow(item, { links, posterSessions }));
       table.append(body);
     } else {
       if (!loose) table.append(loose = document.createElement("tbody"));
-      loose.append(itemRow(block.item, links));
+      loose.append(itemRow(block.item, { links, posterSessions }));
     }
   }
 
@@ -132,7 +149,11 @@ if (!warnIfUnconfigured(msg)) {
         h2.textContent = formatDayHeading(config.eventDate);
         programEl.append(h2);
       }
-      programEl.append(programTable(items, programAbstractLinks(items, published)));
+      programEl.append(programTable(items, {
+        links: programAbstractLinks(items, published),
+        posterSessions: programPosterSessions(items),
+        chairs: config?.sessionChairs,
+      }));
     }
   } catch (err) {
     msg.className = "msg err";

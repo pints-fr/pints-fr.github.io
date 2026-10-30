@@ -2,7 +2,9 @@ import { mountLayout, setAuthLink } from "./layout.js";
 import { warnIfUnconfigured } from "./firebase.js";
 import { checkIsAdmin, requireUser } from "./auth.js";
 import { listPublicAbstracts } from "./db.js";
-import { filterAbstracts, sortPublicAbstracts, summaryAuthorLine } from "./abstract-utils.mjs";
+import {
+  filterAbstracts, posterCode, sortPublicAbstracts, summaryAuthorLine,
+} from "./abstract-utils.mjs";
 import {
   ballotBlockedText, ballotStatusText, loadBallot, voteErrorText, voteFor, withdrawVote,
 } from "./vote-actions.js";
@@ -49,11 +51,13 @@ async function mount(user) {
 
   const draw = () => {
     const term = queryEl.value.trim();
-    // "12" or "P12" is a board number: that is what people read off the board.
-    const number = /^p?(\d+)$/i.exec(term)?.[1];
-    const shown = number
-      ? posters.filter((p) => String(p.posterNumber) === number)
-      : filterAbstracts(posters, term);
+    // "P1-12" or "1-12" is a board code: that is what people read off the
+    // board. A bare "12" or "P12" is board 12 of either session.
+    const board = /^p?(\d+)(?:\s*-\s*(\d+))?$/i.exec(term);
+    const shown = !board ? filterAbstracts(posters, term)
+      : board[2] ? posters.filter((p) =>
+        String(p.posterSession) === board[1] && String(p.posterNumber) === board[2])
+        : posters.filter((p) => String(p.posterNumber) === board[1]);
     choicesEl.replaceChildren(...shown.map((p) => choiceRow(p, user.uid, ballot, selected)));
     if (!shown.length) {
       const none = document.createElement("p");
@@ -122,10 +126,11 @@ function choiceRow(poster, uid, ballot, selected) {
   const text = document.createElement("span");
   const title = document.createElement("span");
   title.className = "vote-title";
-  if (poster.posterNumber) {
+  const code = posterCode(poster);
+  if (code) {
     const no = document.createElement("span");
     no.className = "poster-no";
-    no.textContent = `P${poster.posterNumber} `;
+    no.textContent = `${code} `;
     title.append(no);
   }
   title.append(poster.title ?? "");

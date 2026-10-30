@@ -95,3 +95,16 @@ test("an admin can link a program item to an abstract", async () => {
   await assertSucceeds(setDoc(doc(asUser(env, "boss"), "schedule", "s1"),
     item({ kind: "talk", abstractId: "alice" })));
 });
+
+test("a poster slot can name its poster session, from the vocabulary only", async () => {
+  await seedAdmin(env, "boss");
+  const fs = asUser(env, "boss");
+  for (const posterSession of [1, 2]) {
+    await assertSucceeds(setDoc(doc(fs, "schedule", "s1"),
+      item({ kind: "poster", posterSession })));
+  }
+  for (const posterSession of [0, 3, "1", null]) {
+    await assertFails(setDoc(doc(fs, "schedule", "s1"),
+      item({ kind: "poster", posterSession })));
+  }
+});

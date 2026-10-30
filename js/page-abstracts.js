@@ -5,8 +5,8 @@ import {
   getMyAbstract, getPublicAbstract, getSiteConfig, listPublicAbstracts, retractAbstract,
 } from "./db.js";
 import {
-  abstractAnchor, filterAbstracts, groupByTopic, retractQuestion, sortPublicAbstracts,
-  submissionWindows,
+  abstractAnchor, filterAbstracts, groupBySession, posterSessionAnchor, retractQuestion,
+  sortPublicAbstracts, submissionWindows,
 } from "./abstract-utils.mjs";
 import { abstractCard, abstractDisclosure, abstractPermalink } from "./abstract-card.js";
 import { mountSubmissionCard } from "./submission-view.js";
@@ -281,14 +281,17 @@ async function mountList() {
     const shown = filterAbstracts(byTopic, queryEl.value);
     countEl.textContent = `${shown.length} of ${all.length} shown.`;
 
-    // groupByTopic keeps input order inside each bucket, so talks-first-then-
-    // board-number survives within a topic, and it sweeps an unknown topic into
-    // a trailing group rather than dropping the abstract.
+    // Talks, then one section per poster session, which is how the day is
+    // walked. groupBySession keeps input order inside each, so board order
+    // survives, and a poster not yet given a session lands in a trailing
+    // section rather than vanishing.
     const nodes = [];
-    for (const group of groupByTopic(shown, ABSTRACT_TOPICS)) {
+    for (const group of groupBySession(shown)) {
       const h2 = document.createElement("h2");
       h2.className = "topic-heading";
-      h2.textContent = group.topic ? (TOPIC_LABELS[group.topic] ?? group.topic) : "Other";
+      // The program's poster slots link here, to the session's heading.
+      if (typeof group.key === "number") h2.id = posterSessionAnchor(group.key);
+      h2.textContent = group.label;
       const count = document.createElement("span");
       count.className = "muted";
       count.textContent = ` ${group.items.length}`;
@@ -310,22 +313,24 @@ async function mountList() {
   };
 
   // #abstract-<id>, which is how the program links a talk: open that row and
-  // bring it into view. The browser's own jump to the hash fires before the
-  // list exists, so it is done here, after the draw. A filter that hides the
-  // row is cleared rather than leaving the link to land on nothing.
+  // bring it into view. #poster-session-<n>, how it links a poster slot: bring
+  // that session's heading into view. The browser's own jump to the hash fires
+  // before the list exists, so it is done here, after the draw. A filter that
+  // hides the target is cleared rather than leaving the link to land on
+  // nothing.
   const reveal = () => {
     const id = decodeURIComponent(location.hash.slice(1));
     if (!id) return;
-    let row = document.getElementById(id);
-    if (!row && (queryEl.value || topicEl.value)) {
+    let target = document.getElementById(id);
+    if (!target && (queryEl.value || topicEl.value)) {
       queryEl.value = "";
       topicEl.value = "";
       draw();
-      row = document.getElementById(id);
+      target = document.getElementById(id);
     }
-    if (!(row instanceof HTMLDetailsElement)) return;
-    row.open = true;
-    row.scrollIntoView({ block: "start" });
+    if (target instanceof HTMLDetailsElement) target.open = true;
+    else if (!(target instanceof HTMLHeadingElement)) return;
+    target.scrollIntoView({ block: "start" });
   };
 
   try {

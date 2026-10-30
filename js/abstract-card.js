@@ -1,6 +1,6 @@
 import { TOPIC_LABELS } from "./config.mjs";
 import {
-  authorLineParts, submissionStatusTone, summaryAuthorLine,
+  authorLineParts, posterCode, submissionStatusTone, summaryAuthorLine,
 } from "./abstract-utils.mjs";
 import { renderAbstractHtml } from "./markdown.js";
 
@@ -19,10 +19,11 @@ import { renderAbstractHtml } from "./markdown.js";
 /** Poster board number or talk pill, then the title. Nodes, not an element. */
 function headingParts(abstract) {
   const parts = [];
-  if (abstract.type === "poster" && abstract.posterNumber) {
+  const code = posterCode(abstract);
+  if (abstract.type === "poster" && code) {
     const number = document.createElement("span");
     number.className = "poster-no";
-    number.textContent = `P${abstract.posterNumber} `;
+    number.textContent = `${code} `;
     parts.push(number);
   } else if (abstract.type === "talk") {
     const pill = document.createElement("span");

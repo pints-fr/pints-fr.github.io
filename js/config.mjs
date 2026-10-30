@@ -99,6 +99,16 @@ export const SESSION_LABELS = {
   keynote: "Keynote Lectures",
 };
 
+// The poster sessions. A poster's board code is P<session>-<number>, numbered
+// from 1 within each session; see posterCode() in abstract-utils.mjs. The 1 and
+// 2 also appear in firestore.rules validScheduleItem(), which cannot import
+// this file.
+export const POSTER_SESSIONS = [1, 2];
+export const POSTER_SESSION_LABELS = {
+  1: "Poster session 1",
+  2: "Poster session 2",
+};
+
 // Figure uploads. maxEdge is applied by the client before upload; maxBytes is
 // the hard limit that storage.rules also enforces.
 export const FIGURE = {

@@ -1,10 +1,11 @@
 import {
-  ABSTRACT_STATUSES, ABSTRACT_TOPICS, ABSTRACT_TYPES, STATUS_LABELS, TOPIC_LABELS,
+  ABSTRACT_STATUSES, ABSTRACT_TOPICS, ABSTRACT_TYPES, POSTER_SESSIONS, POSTER_SESSION_LABELS,
+  STATUS_LABELS, TOPIC_LABELS,
 } from "./config.mjs";
 import {
   authorLineParts, displayOrder, filterAdminAbstracts, groupByTopic, inReview,
-  nextPosterNumber, posterNumbering, submissionStatusLabel, submissionWindows,
-  summaryAuthorLine,
+  lighterSession, nextPosterNumber, renumberWithinSessions,
+  splitPosterSessions, submissionStatusLabel, submissionWindows, summaryAuthorLine,
 } from "./abstract-utils.mjs";
 import { disclosureShell, statusPill } from "./abstract-card.js";
 import {
@@ -396,59 +397,94 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     })) === "go";
 
     // Only the abstracts on screen, like the exports: filter to a topic and this
-    // accepts that topic. Numbered after the last board already in use, in the
-    // order shown, so an earlier acceptance keeps its number.
+    // accepts that topic. Each goes to whichever session keeps its topic most
+    // even, numbered after the last board in use there, so an earlier
+    // acceptance keeps its number.
     const acceptAll = document.createElement("button");
     acceptAll.id = "adm-accept-all";
     acceptAll.addEventListener("click", () => run(acceptAll, async () => {
       const pending = displayOrder(inReview(shown), ABSTRACT_TOPICS);
       if (!pending.length) return;
-      const numbers = posterNumbering(pending, nextPosterNumber(published));
-      const first = numbers[0].posterNumber;
-      const last = numbers.at(-1).posterNumber;
+      const placed = [...published];
+      const entries = pending.map((abstract) => {
+        const posterSession = lighterSession(placed, abstract.topic);
+        const posterNumber = nextPosterNumber(placed, posterSession);
+        placed.push({ type: "poster", topic: abstract.topic, posterSession, posterNumber });
+        return { abstract, posterSession, posterNumber };
+      });
+      const perSession = POSTER_SESSIONS
+        .map((s) => [s, entries.filter((e) => e.posterSession === s).length])
+        .filter(([, n]) => n)
+        .map(([s, n]) => `${n} to ${POSTER_SESSION_LABELS[s]}`)
+        .join(", ");
       const ok = await confirmed("Accept as posters",
         `Accept the ${pending.length} abstract${pending.length === 1 ? "" : "s"} still in review `
-        + `that ${pending.length === 1 ? "is" : "are"} shown, as posters `
-        + `${first === last ? `P${first}` : `P${first}–P${last}`}, and publish them? `
-        + "Talks can still be promoted one by one afterwards.",
+        + `that ${pending.length === 1 ? "is" : "are"} shown, as posters (${perSession}), `
+        + "and publish them? Talks can still be promoted one by one afterwards.",
         "Accept and publish");
       if (!ok) return;
-      await publishAbstracts(pending.map((abstract, i) => ({
-        abstract, posterNumber: numbers[i].posterNumber,
-      })), adminUid, { editClosed });
-      say(`Accepted ${pending.length} as posters (${first === last ? `P${first}` : `P${first}–P${last}`}).`, "ok");
+      await publishAbstracts(entries, adminUid, { editClosed });
+      say(`Accepted ${pending.length} as posters (${perSession}).`, "ok");
     }));
 
-    // Every accepted poster, not just those shown: renumbering a filtered subset
-    // from 1 would hand out numbers the hidden posters still hold.
+    // Both work on every accepted poster, not just those shown: renumbering a
+    // filtered subset from 1 would hand out numbers the hidden posters still
+    // hold.
+    const acceptedPosters = () => displayOrder(
+      sortShown(annotated.filter((a) => a.status === "accepted" && a.publicType === "poster")),
+      ABSTRACT_TOPICS);
+
+    const split = document.createElement("button");
+    split.className = "secondary";
+    split.id = "adm-split";
+    split.textContent = "Split posters into two sessions";
+    split.title = "Deal every accepted poster into poster sessions 1 and 2, each topic split "
+      + "evenly, and number them P1-1… and P2-1…, topic by topic in the current sort order";
+    split.addEventListener("click", () => run(split, async () => {
+      const posters = acceptedPosters();
+      if (!posters.length) return;
+      const ok = await confirmed("Split posters into two sessions",
+        `Split all ${posters.length} accepted posters evenly between the two poster sessions, `
+        + "each topic half and half, and number them P1-1… and P2-1… in the current sort order? "
+        + "Filters are ignored, and every existing session and board number changes.",
+        "Split and renumber");
+      if (!ok) return;
+      const assignments = splitPosterSessions(posters, ABSTRACT_TOPICS);
+      await setPosterNumbers(assignments);
+      const counts = POSTER_SESSIONS.map((s) =>
+        assignments.filter((a) => a.posterSession === s).length);
+      say(`Split ${posters.length} posters: ${counts.join(" and ")}.`, "ok");
+    }));
+
+    // After posters were moved by hand: keeps every session, closes the gaps.
     const renumber = document.createElement("button");
     renumber.className = "secondary";
     renumber.id = "adm-renumber";
-    renumber.textContent = "Renumber posters in this order";
-    renumber.title = "Give every accepted poster a board number, P1 upwards, "
+    renumber.textContent = "Renumber within sessions";
+    renumber.title = "Keep each poster in its session and number each session from 1, "
       + "topic by topic in the current sort order";
     renumber.addEventListener("click", () => run(renumber, async () => {
-      const posters = displayOrder(
-        sortShown(annotated.filter((a) => a.status === "accepted" && a.publicType === "poster")),
-        ABSTRACT_TOPICS);
+      const posters = acceptedPosters();
       if (!posters.length) return;
-      const ok = await confirmed("Renumber posters",
-        `Renumber all ${posters.length} accepted posters P1–P${posters.length}, topic by topic `
-        + "in the current sort order? Filters are ignored, and existing board numbers change.",
+      const ok = await confirmed("Renumber within sessions",
+        `Renumber all ${posters.length} accepted posters from 1 within each poster session, `
+        + "topic by topic in the current sort order? Sessions stay as they are; filters are "
+        + "ignored, and existing board numbers change.",
         "Renumber");
       if (!ok) return;
-      await setPosterNumbers(posterNumbering(posters));
-      say(`Renumbered ${posters.length} posters, P1–P${posters.length}.`, "ok");
+      await setPosterNumbers(renumberWithinSessions(posters, ABSTRACT_TOPICS));
+      say(`Renumbered ${posters.length} posters within their sessions.`, "ok");
     }));
 
-    bar.append(acceptAll, renumber);
+    bar.append(acceptAll, split, renumber);
 
     return function sync() {
       const pending = inReview(shown).length;
       acceptAll.textContent = `Accept ${pending} in review as posters`;
       acceptAll.hidden = blind || pending === 0;
-      renumber.hidden = blind
-        || !annotated.some((a) => a.status === "accepted" && a.publicType === "poster");
+      const anyPoster = annotated.some((a) => a.status === "accepted" && a.publicType === "poster");
+      split.hidden = blind || !anyPoster;
+      renumber.hidden = blind || !anyPoster;
     };
   }
 
@@ -609,7 +645,9 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
       className: "abstract admin-abstract",
       summary: [
         statusPill(submissionStatusLabel(abstract.status, {
-          type: abstract.publicType, posterNumber: abstract.posterNumber,
+          type: abstract.publicType,
+          posterSession: abstract.posterSession,
+          posterNumber: abstract.posterNumber,
         }), abstract.status),
         title,
         who,
@@ -744,8 +782,36 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     posterInput.max = "999";
     posterInput.style.maxWidth = "4.5rem";
     posterInput.title = "Poster board number";
-    posterInput.value = String(abstract.posterNumber ?? nextPosterNumber(published));
-    const syncPosterInput = () => { posterInput.hidden = typeSelect.value !== "poster"; };
+    // Moving a poster to the other session is picking it here: the number then
+    // jumps to the next free board there, and "Update published copy" writes
+    // both. "Renumber within sessions" closes the gap it leaves behind.
+    const sessionSelect = document.createElement("select");
+    sessionSelect.title = "Poster session";
+    sessionSelect.style.maxWidth = "9.5rem";
+    for (const s of POSTER_SESSIONS) {
+      const option = document.createElement("option");
+      option.value = String(s);
+      option.textContent = POSTER_SESSION_LABELS[s];
+      sessionSelect.append(option);
+    }
+    const startSession = POSTER_SESSIONS.includes(abstract.posterSession)
+      ? abstract.posterSession
+      : lighterSession(published, abstract.topic);
+    sessionSelect.value = String(startSession);
+    posterInput.value = String(
+      POSTER_SESSIONS.includes(abstract.posterSession) && Number.isInteger(abstract.posterNumber)
+        ? abstract.posterNumber
+        : nextPosterNumber(published, startSession));
+    sessionSelect.addEventListener("change", () => {
+      const s = Number(sessionSelect.value);
+      posterInput.value = String(s === abstract.posterSession && abstract.posterNumber
+        ? abstract.posterNumber
+        : nextPosterNumber(published.filter((a) => a.id !== abstract.id), s));
+    });
+    const syncPosterInput = () => {
+      posterInput.hidden = typeSelect.value !== "poster";
+      sessionSelect.hidden = typeSelect.value !== "poster";
+    };
     typeSelect.addEventListener("change", syncPosterInput);
     syncPosterInput();
 
@@ -788,6 +854,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
         await recordDecision(abstract.id, adminUid);
         await publishAbstract(abstract.id, abstract, {
           type: typeSelect.value,
+          posterSession: Number(sessionSelect.value),
           posterNumber: Number(posterInput.value),
           acceptedAt: abstract.acceptedAt ?? null,
           editClosed,
@@ -795,7 +862,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
         say(`Published “${abstract.title}”.`, "ok");
       });
     accept.title = isPublished
-      ? "Rewrite the public copy with the type and board number selected here"
+      ? "Rewrite the public copy with the type, poster session and board number selected here"
       : "Accept this abstract and put it on the public list";
 
     const reject = guarded("Reject", "secondary", async () => {
@@ -837,7 +904,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
     reject.hidden = blind;
     remove.hidden = blind;
 
-    actions.append(typeSelect, posterInput, accept, reject, edit, pull, remove);
+    actions.append(typeSelect, sessionSelect, posterInput, accept, reject, edit, pull, remove);
 
     // The editor is mounted into the card it belongs to, in the same panel the
     // account page uses, so the form is never far from the abstract it edits.
@@ -894,6 +961,7 @@ export async function mountAbstractsTab(host, { adminUid, user }) {
       republish: abstract.publicType
         ? {
           type: abstract.publicType,
+          posterSession: abstract.posterSession,
           posterNumber: abstract.posterNumber,
           acceptedAt: abstract.acceptedAt,
         }

@@ -1,3 +1,5 @@
+import { POSTER_SESSIONS, POSTER_SESSION_LABELS } from "./config.mjs";
+
 const collator = new Intl.Collator("en", { sensitivity: "base" });
 
 /** Author names with their 1-based affiliation superscript marks. */
@@ -26,13 +28,109 @@ export function summaryAuthorLine(authors) {
   return list.length > 1 ? `${name} et al.` : name;
 }
 
-/** The next free poster board number. */
-export function nextPosterNumber(publicAbstracts) {
+/**
+ * The next free board number. With `session`, the next one within that poster
+ * session, since numbering restarts in each: P1-1… and P2-1….
+ */
+export function nextPosterNumber(publicAbstracts, session = null) {
   const used = (publicAbstracts ?? [])
+    .filter((a) => session === null || a?.posterSession === session)
     .map((a) => a?.posterNumber)
     .filter((n) => Number.isInteger(n));
   return used.length ? Math.max(...used) + 1 : 1;
 }
+
+// --------------------------------------------------------- poster sessions
+
+const isSession = (n) => POSTER_SESSIONS.includes(n);
+
+/**
+ * A poster's board code: "P1-3" is session 1, third board. A poster numbered
+ * before the sessions existed has no session and keeps its old "P3", so a
+ * board printed then still reads correctly. Empty for anything without a
+ * number, talks included.
+ */
+export function posterCode(abstract) {
+  if (abstract?.type && abstract.type !== "poster") return "";
+  const n = abstract?.posterNumber;
+  if (!Number.isInteger(n) || n < 1) return "";
+  return isSession(abstract.posterSession) ? `P${abstract.posterSession}-${n}` : `P${n}`;
+}
+
+/**
+ * Deal posters into the two sessions: topic by topic in the order given,
+ * alternating 1, 2, 1, 2… on ONE counter that runs across topics. Each topic
+ * then splits within one poster of even, and so do the two sessions overall.
+ * Numbers restart in each session and follow the same order, so inside a
+ * session the boards still run topic by topic.
+ */
+export function splitPosterSessions(posters, topics) {
+  const next = new Map(POSTER_SESSIONS.map((s) => [s, 1]));
+  return displayOrder(posters, topics).map((a, i) => {
+    const posterSession = POSTER_SESSIONS[i % POSTER_SESSIONS.length];
+    const posterNumber = next.get(posterSession);
+    next.set(posterSession, posterNumber + 1);
+    return { id: a.id, posterSession, posterNumber };
+  });
+}
+
+/**
+ * Close the gaps a move between sessions leaves: every poster keeps its
+ * session and is numbered 1… within it, topic by topic in the order given. A
+ * poster with no session yet goes to the lighter one.
+ */
+export function renumberWithinSessions(posters, topics) {
+  const placed = [];
+  for (const a of displayOrder(posters, topics)) {
+    const posterSession = isSession(a.posterSession)
+      ? a.posterSession
+      : lighterSession(placed, a.topic);
+    placed.push({ id: a.id, topic: a.topic, posterSession });
+  }
+  const next = new Map(POSTER_SESSIONS.map((s) => [s, 1]));
+  return placed.map(({ id, posterSession }) => {
+    const posterNumber = next.get(posterSession);
+    next.set(posterSession, posterNumber + 1);
+    return { id, posterSession, posterNumber };
+  });
+}
+
+/**
+ * Where one more poster of `topic` should go to keep the split even: the
+ * session holding fewer posters of that topic, then fewer posters overall,
+ * then session 1. Talks are not counted.
+ */
+export function lighterSession(publicAbstracts, topic) {
+  const posters = (publicAbstracts ?? []).filter((a) => a?.type !== "talk");
+  const count = (s, sameTopic) => posters.filter((a) =>
+    a?.posterSession === s && (!sameTopic || a?.topic === topic)).length;
+  return [...POSTER_SESSIONS].sort((a, b) =>
+    count(a, true) - count(b, true) || count(a, false) - count(b, false) || a - b)[0];
+}
+
+/**
+ * The public list's sections: talks first, then each poster session in turn,
+ * then any poster not yet given a session. Input order is kept within each,
+ * and empty sections are dropped.
+ */
+export function groupBySession(list) {
+  const groups = [
+    { key: "talks", label: "Talks", items: [] },
+    ...POSTER_SESSIONS.map((s) => ({ key: s, label: POSTER_SESSION_LABELS[s], items: [] })),
+    { key: "unassigned", label: "Posters", items: [] },
+  ];
+  const byKey = new Map(groups.map((g) => [g.key, g]));
+  for (const a of list ?? []) {
+    const key = a?.type === "talk" ? "talks"
+      : isSession(a?.posterSession) ? a.posterSession : "unassigned";
+    byKey.get(key).items.push(a);
+  }
+  return groups.filter((g) => g.items.length);
+}
+
+/** The heading a poster session carries on the public list, and its link. */
+export const posterSessionAnchor = (session) => `poster-session-${session}`;
+export const posterSessionLink = (session) => `abstracts.html#${posterSessionAnchor(session)}`;
 
 /** Free-text search over title, body, author names, and affiliations. */
 export function filterAbstracts(list, term) {
@@ -91,11 +189,16 @@ function matchesTalk(talkConsidered, wanted) {
   return wanted === "optedout" ? talkConsidered === false : talkConsidered !== false;
 }
 
-/** Talks first, then posters by board number; ties broken on title. */
+/**
+ * Talks first, then posters by session (none last) and board number; ties
+ * broken on title.
+ */
 export function sortPublicAbstracts(list) {
   const rank = (a) => (a?.type === "talk" ? 0 : 1);
+  const session = (a) => (isSession(a?.posterSession) ? a.posterSession : Number.MAX_SAFE_INTEGER);
   return [...list].sort((a, b) =>
     rank(a) - rank(b) ||
+    session(a) - session(b) ||
     (a?.posterNumber ?? Number.MAX_SAFE_INTEGER) - (b?.posterNumber ?? Number.MAX_SAFE_INTEGER) ||
     collator.compare(String(a?.title ?? ""), String(b?.title ?? "")));
 }
@@ -203,9 +306,8 @@ export function submissionStatusLabel(status, published = null) {
   if (status === "accepted") {
     if (published?.type === "talk") return "Accepted as a talk";
     if (published?.type === "poster") {
-      return Number.isInteger(published.posterNumber)
-        ? `Accepted as poster P${published.posterNumber}`
-        : "Accepted as a poster";
+      const code = posterCode(published);
+      return code ? `Accepted as poster ${code}` : "Accepted as a poster";
     }
     return "Accepted";
   }

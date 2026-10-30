@@ -6,6 +6,7 @@ import {
   groupScheduleBySession,
   parseTime,
   programAbstractLinks,
+  programPosterSessions,
   romanNumeral,
   sortScheduleItems,
 } from "../js/schedule-utils.mjs";
@@ -160,4 +161,24 @@ test("programAbstractLinks prefers explicit links, then matches talk titles", ()
     { id: "s6", kind: "talk", title: "Grid cells in the dark", abstractId: "gone" },
   ], published);
   assert.deepEqual([...links], [["s1", "a1"], ["s4", "a2"]]);
+});
+
+test("programPosterSessions numbers poster slots in time order", () => {
+  const sessions = programPosterSessions([
+    { id: "late", kind: "poster", start: "16:00" },
+    { id: "talk", kind: "talk", start: "11:00" },
+    { id: "early", kind: "poster", start: "12:30" },
+    { id: "extra", kind: "poster", start: "17:30" },
+  ]);
+  assert.deepEqual([...sessions], [["early", 1], ["late", 2]]);
+});
+
+test("programPosterSessions honours an explicit session", () => {
+  const sessions = programPosterSessions([
+    { id: "a", kind: "poster", start: "12:30", posterSession: 2 },
+    { id: "b", kind: "poster", start: "16:00", posterSession: 1 },
+    { id: "c", kind: "talk", start: "17:00", posterSession: 1 },
+  ]);
+  assert.deepEqual([...sessions], [["a", 2], ["b", 1]]);
+  assert.deepEqual([...programPosterSessions(null)], []);
 });

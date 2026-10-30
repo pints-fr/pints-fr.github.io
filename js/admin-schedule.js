@@ -1,8 +1,15 @@
-import { SCHEDULE_KINDS, SCHEDULE_SESSIONS, SESSION_LABELS } from "./config.mjs";
-import { formatTimeRange, groupScheduleBySession } from "./schedule-utils.mjs";
-import { abstractListLink, presenterOf, sortPublicAbstracts } from "./abstract-utils.mjs";
 import {
-  deleteScheduleItem, listPublicAbstracts, listSchedule, saveScheduleItem,
+  POSTER_SESSIONS, POSTER_SESSION_LABELS, SCHEDULE_KINDS, SCHEDULE_SESSIONS, SESSION_LABELS,
+} from "./config.mjs";
+import {
+  formatTimeRange, groupScheduleBySession, programPosterSessions,
+} from "./schedule-utils.mjs";
+import {
+  abstractListLink, posterCode, posterSessionLink, presenterOf, sortPublicAbstracts,
+} from "./abstract-utils.mjs";
+import {
+  deleteScheduleItem, getSiteConfig, listPublicAbstracts, listSchedule, saveScheduleItem,
+  saveSiteConfig,
 } from "./db.js";
 
 // PINTS is one day in one venue, so there is no date, no room, and no manual
@@ -24,7 +31,11 @@ export async function mountScheduleTab(host) {
     <h2 id="s-form-heading">Add an item</h2>
     <form id="s-form" novalidate></form>
     <h2>Current program</h2>
-    <div id="s-list"></div>`;
+    <div id="s-list"></div>
+    <h2>Session chairs</h2>
+    <p class="muted">Shown on each session's banner in the program:
+      “Session I | Cognitive Neuroscience | chaired by: …”. Leave a box empty for no chair.</p>
+    <form id="s-chairs" novalidate></form>`;
 
   const msg = host.querySelector("#s-msg");
   const form = host.querySelector("#s-form");
@@ -97,9 +108,32 @@ export async function mountScheduleTab(host) {
   const kindField = document.createElement("div");
   kindField.append(kindLabel, kindSelect);
 
+  // Which of the two poster sessions a poster slot is, so the program can link
+  // it to that half of the posters. Left empty, poster slots count as session
+  // 1, 2… in time order (programPosterSessions).
+  const posterSessionLabel = document.createElement("label");
+  posterSessionLabel.setAttribute("for", "s-poster-session");
+  posterSessionLabel.textContent = "Poster session";
+  const posterSessionSelect = document.createElement("select");
+  posterSessionSelect.id = "s-poster-session";
+  const byOrder = document.createElement("option");
+  byOrder.value = "";
+  byOrder.textContent = "— by time order —";
+  posterSessionSelect.append(byOrder);
+  for (const n of POSTER_SESSIONS) {
+    const option = document.createElement("option");
+    option.value = String(n);
+    option.textContent = POSTER_SESSION_LABELS[n];
+    posterSessionSelect.append(option);
+  }
+  const posterSessionField = document.createElement("div");
+  posterSessionField.append(posterSessionLabel, posterSessionSelect);
+  const syncPosterSession = () => { posterSessionField.hidden = kindSelect.value !== "poster"; };
+  kindSelect.addEventListener("change", syncPosterSession);
+
   const kindSessionRow = document.createElement("div");
   kindSessionRow.className = "field-row";
-  kindSessionRow.append(sessionField, kindField);
+  kindSessionRow.append(sessionField, kindField, posterSessionField);
   form.append(kindSessionRow);
 
   // A talk slot can point at the abstract it presents, and the public program
@@ -122,8 +156,7 @@ export async function mountScheduleTab(host) {
     for (const a of sortPublicAbstracts(list)) {
       const option = document.createElement("option");
       option.value = a.id;
-      const tag = a.type === "talk" ? "Talk"
-        : Number.isInteger(a.posterNumber) ? `P${a.posterNumber}` : "Poster";
+      const tag = a.type === "talk" ? "Talk" : posterCode(a) || "Poster";
       option.textContent = `${tag} · ${a.title ?? "(untitled)"}`;
       abstractSelect.append(option);
     }
@@ -161,6 +194,8 @@ export async function mountScheduleTab(host) {
     for (const spec of FIELDS) field(spec.key).value = "";
     kindSelect.value = "talk";
     sessionSelect.value = "";
+    posterSessionSelect.value = "";
+    syncPosterSession();
     abstractSelect.value = "";
     heading.textContent = "Add an item";
     save.textContent = "Add item";
@@ -172,6 +207,9 @@ export async function mountScheduleTab(host) {
     for (const spec of FIELDS) field(spec.key).value = item[spec.key] ?? "";
     kindSelect.value = item.kind ?? "talk";
     sessionSelect.value = SCHEDULE_SESSIONS.includes(item.session) ? item.session : "";
+    posterSessionSelect.value = POSTER_SESSIONS.includes(item.posterSession)
+      ? String(item.posterSession) : "";
+    syncPosterSession();
     // A link to an abstract since un-accepted shows as none rather than as a
     // blank select; saving then drops it, which is what it should be.
     abstractSelect.value = abstractsById.has(item.abstractId) ? item.abstractId : "";
@@ -181,7 +219,7 @@ export async function mountScheduleTab(host) {
     form.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  function row(item, refresh) {
+  function row(item, refresh, posterSessions) {
     const tr = document.createElement("tr");
     tr.className = `kind-${item.kind ?? "other"}`;
 
@@ -198,6 +236,15 @@ export async function mountScheduleTab(host) {
       link.target = "_blank";
       link.rel = "noopener";
       link.textContent = "abstract ↗";
+      what.append(" — ", link);
+    }
+    const posterSession = posterSessions.get(item.id);
+    if (posterSession) {
+      const link = document.createElement("a");
+      link.href = posterSessionLink(posterSession);
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = `${POSTER_SESSION_LABELS[posterSession]} ↗`;
       what.append(" — ", link);
     }
 
@@ -236,6 +283,9 @@ export async function mountScheduleTab(host) {
     return tr;
   }
 
+  // The chairs as last saved, for the banners below.
+  let chairs = {};
+
   function sessionHead(block) {
     const tr = document.createElement("tr");
     tr.className = "session-head";
@@ -245,6 +295,13 @@ export async function mountScheduleTab(host) {
     const label = document.createElement("td");
     label.colSpan = 4;
     label.textContent = block.label;
+    const chair = String(chairs[block.session] ?? "").trim();
+    if (chair) {
+      const by = document.createElement("span");
+      by.className = "session-chair";
+      by.textContent = ` | chaired by: ${chair}`;
+      label.append(by);
+    }
     tr.append(numeral, label);
     return tr;
   }
@@ -265,6 +322,7 @@ export async function mountScheduleTab(host) {
 
     // Grouped the same way the public page groups it, so this list is a preview
     // of the program rather than a second view of it that has to be reconciled.
+    const posterSessions = programPosterSessions(items);
     let loose = null;
     for (const block of groupScheduleBySession(items)) {
       if (block.type === "session") {
@@ -272,11 +330,11 @@ export async function mountScheduleTab(host) {
         const body = document.createElement("tbody");
         body.className = `session session-${block.session}`;
         body.append(sessionHead(block));
-        for (const item of block.items) body.append(row(item, render));
+        for (const item of block.items) body.append(row(item, render, posterSessions));
         table.append(body);
       } else {
         if (!loose) table.append(loose = document.createElement("tbody"));
-        loose.append(row(block.item, render));
+        loose.append(row(block.item, render, posterSessions));
       }
     }
 
@@ -293,6 +351,9 @@ export async function mountScheduleTab(host) {
     // stored "" would have to be special-cased by every reader.
     if (sessionSelect.value) data.session = sessionSelect.value;
     if (abstractSelect.value) data.abstractId = abstractSelect.value;
+    if (data.kind === "poster" && posterSessionSelect.value) {
+      data.posterSession = Number(posterSessionSelect.value);
+    }
 
     save.disabled = true;
     try {
@@ -311,6 +372,55 @@ export async function mountScheduleTab(host) {
   cancel.addEventListener("click", resetForm);
   fillAbstractOptions([]);
   resetForm();
+
+  // Session chairs: one box per session, kept in config/site.sessionChairs.
+  // A whole map is saved each time, so clearing a box clears that chair.
+  const chairsForm = host.querySelector("#s-chairs");
+  const chairInputs = new Map();
+  for (const id of SCHEDULE_SESSIONS) {
+    const label = document.createElement("label");
+    label.setAttribute("for", `s-chair-${id}`);
+    label.textContent = SESSION_LABELS[id];
+    const input = document.createElement("input");
+    input.id = `s-chair-${id}`;
+    input.type = "text";
+    input.maxLength = 200;
+    input.placeholder = "Chair's name";
+    chairInputs.set(id, input);
+    chairsForm.append(label, input);
+  }
+  const chairActions = document.createElement("div");
+  chairActions.className = "actions";
+  const saveChairs = document.createElement("button");
+  saveChairs.type = "submit";
+  saveChairs.textContent = "Save chairs";
+  chairActions.append(saveChairs);
+  chairsForm.append(chairActions);
+
+  chairsForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const next = Object.fromEntries(
+      [...chairInputs].map(([id, input]) => [id, input.value.trim()]));
+    saveChairs.disabled = true;
+    try {
+      await saveSiteConfig({ sessionChairs: next });
+      chairs = next;
+      say("Session chairs saved.", "ok");
+      await render();
+    } catch (err) {
+      say("Could not save the session chairs.", "err");
+      console.error("[pints] saveSiteConfig sessionChairs", err);
+    } finally {
+      saveChairs.disabled = false;
+    }
+  });
+
+  try {
+    chairs = (await getSiteConfig())?.sessionChairs ?? {};
+    for (const [id, input] of chairInputs) input.value = chairs[id] ?? "";
+  } catch (err) {
+    console.error("[pints] getSiteConfig sessionChairs", err);
+  }
 
   try {
     fillAbstractOptions(await listPublicAbstracts());

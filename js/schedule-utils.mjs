@@ -1,4 +1,4 @@
-import { SESSION_LABELS } from "./config.mjs";
+import { POSTER_SESSIONS, SESSION_LABELS } from "./config.mjs";
 
 const LATEST = Number.MAX_SAFE_INTEGER;
 const collator = new Intl.Collator("en", { sensitivity: "base" });
@@ -134,4 +134,25 @@ export function programAbstractLinks(items, published) {
     if (id) links.set(item.id, id);
   }
   return links;
+}
+
+/**
+ * Which poster session each poster slot of the program is, as `Map<itemId,
+ * session>`.
+ *
+ * An organizer's explicit choice wins. Otherwise the poster slots are taken
+ * in time order as session 1, session 2…, so a program typed in before the
+ * field existed still links each slot to its half of the posters. A slot past
+ * the last session gets no link rather than a wrong one.
+ */
+export function programPosterSessions(items) {
+  const sessions = new Map();
+  let next = 0;
+  for (const item of sortScheduleItems(items ?? [])) {
+    if (item?.kind !== "poster") continue;
+    const fallback = POSTER_SESSIONS[next++];
+    const session = POSTER_SESSIONS.includes(item.posterSession) ? item.posterSession : fallback;
+    if (session) sessions.set(item.id, session);
+  }
+  return sessions;
 }

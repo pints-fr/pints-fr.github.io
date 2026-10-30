@@ -660,6 +660,8 @@ tr.dragging { opacity: .4; }
   text-transform: none; letter-spacing: normal; padding-block: .6rem;
 }
 .program tr.session-head th { white-space: nowrap; }
+/* The chair is part of the banner but not its title. */
+.program tr.session-head .session-chair { font-weight: 400; }
 
 form { max-width: var(--measure); }
 fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: 0 1rem 1rem; margin: 0 0 1.5rem; }

@@ -6,15 +6,21 @@ import {
   draftFingerprint,
   filterAbstracts,
   filterAdminAbstracts,
+  groupBySession,
   groupByTopic,
   inReview,
+  lighterSession,
   nextPosterNumber,
   ownerCan,
+  posterCode,
   posterNumbering,
+  posterSessionLink,
   presenterOf,
   publicFields,
   publicMode,
+  renumberWithinSessions,
   sortPublicAbstracts,
+  splitPosterSessions,
   submissionWindows,
   submissionStatusLabel,
   submissionStatusTone,
@@ -498,4 +504,134 @@ test("presenterOf picks the presenting author and their first affiliation", () =
   assert.deepEqual(presenterOf({ authors: [{ name: "Ana" }] }),
     { speaker: "Ana", affiliation: "" });
   assert.deepEqual(presenterOf({}), { speaker: "", affiliation: "" });
+});
+
+// ------------------------------------------------------------ poster sessions
+
+const TOPICS = ["cognitive", "systems", "computational"];
+const poster = (id, topic, over = {}) => ({ id, type: "poster", topic, title: id, ...over });
+
+test("nextPosterNumber counts within one session when given one", () => {
+  const list = [
+    { posterSession: 1, posterNumber: 4 },
+    { posterSession: 2, posterNumber: 2 },
+    { posterNumber: 9 },
+  ];
+  assert.equal(nextPosterNumber(list, 1), 5);
+  assert.equal(nextPosterNumber(list, 2), 3);
+  assert.equal(nextPosterNumber([], 2), 1);
+  assert.equal(nextPosterNumber(list), 10);
+});
+
+test("posterCode is P<session>-<number>, with the old P<number> for no session", () => {
+  assert.equal(posterCode({ type: "poster", posterSession: 2, posterNumber: 3 }), "P2-3");
+  assert.equal(posterCode({ type: "poster", posterNumber: 3 }), "P3");
+  assert.equal(posterCode({ type: "poster", posterSession: 7, posterNumber: 3 }), "P3");
+  assert.equal(posterCode({ type: "poster", posterSession: 1 }), "");
+  assert.equal(posterCode({ type: "talk", posterSession: 1, posterNumber: 3 }), "");
+  assert.equal(posterCode(null), "");
+});
+
+test("submissionStatusLabel names the session board", () => {
+  assert.equal(
+    submissionStatusLabel("accepted", { type: "poster", posterSession: 1, posterNumber: 5 }),
+    "Accepted as poster P1-5");
+});
+
+test("splitPosterSessions splits every topic and the total evenly", () => {
+  const posters = [
+    ...["a", "b", "c", "d", "e"].map((id) => poster(`cog-${id}`, "cognitive")),
+    ...["a", "b", "c"].map((id) => poster(`sys-${id}`, "systems")),
+    ...["a", "b", "c", "d"].map((id) => poster(`comp-${id}`, "computational")),
+  ];
+  const split = splitPosterSessions(posters, TOPICS);
+  assert.equal(split.length, 12);
+  const topicOf = new Map(posters.map((p) => [p.id, p.topic]));
+  for (const topic of TOPICS) {
+    const ones = split.filter((s) => topicOf.get(s.id) === topic && s.posterSession === 1).length;
+    const twos = split.filter((s) => topicOf.get(s.id) === topic && s.posterSession === 2).length;
+    assert.ok(Math.abs(ones - twos) <= 1, `${topic}: ${ones} vs ${twos}`);
+  }
+  const ones = split.filter((s) => s.posterSession === 1);
+  const twos = split.filter((s) => s.posterSession === 2);
+  assert.equal(ones.length, 6);
+  assert.equal(twos.length, 6);
+  // Numbers restart at 1 in each session and run without gaps.
+  assert.deepEqual(ones.map((s) => s.posterNumber), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(twos.map((s) => s.posterNumber), [1, 2, 3, 4, 5, 6]);
+});
+
+test("splitPosterSessions keeps an odd total within one", () => {
+  const split = splitPosterSessions(
+    [poster("a", "cognitive"), poster("b", "cognitive"), poster("c", "systems")], TOPICS);
+  assert.deepEqual(split.map((s) => [s.id, s.posterSession, s.posterNumber]),
+    [["a", 1, 1], ["b", 2, 1], ["c", 1, 2]]);
+  assert.deepEqual(splitPosterSessions([], TOPICS), []);
+});
+
+test("renumberWithinSessions keeps sessions and closes gaps", () => {
+  const out = renumberWithinSessions([
+    poster("a", "cognitive", { posterSession: 1, posterNumber: 1 }),
+    poster("b", "cognitive", { posterSession: 2, posterNumber: 1 }),
+    poster("c", "systems", { posterSession: 2, posterNumber: 2 }),
+    poster("d", "systems", { posterSession: 2, posterNumber: 7 }),
+  ], TOPICS);
+  assert.deepEqual(out.map((s) => [s.id, s.posterSession, s.posterNumber]),
+    [["a", 1, 1], ["b", 2, 1], ["c", 2, 2], ["d", 2, 3]]);
+});
+
+test("renumberWithinSessions places a poster with no session in the lighter one", () => {
+  const out = renumberWithinSessions([
+    poster("a", "cognitive", { posterSession: 1, posterNumber: 1 }),
+    poster("b", "cognitive"),
+  ], TOPICS);
+  assert.deepEqual(out.map((s) => [s.id, s.posterSession, s.posterNumber]),
+    [["a", 1, 1], ["b", 2, 1]]);
+});
+
+test("lighterSession balances the topic first, then the total", () => {
+  const list = [
+    poster("a", "cognitive", { posterSession: 1 }),
+    poster("b", "systems", { posterSession: 2 }),
+    poster("c", "systems", { posterSession: 2 }),
+    { id: "t", type: "talk", topic: "cognitive", posterSession: 2 },
+  ];
+  assert.equal(lighterSession(list, "cognitive"), 2);
+  assert.equal(lighterSession(list, "systems"), 1);
+  // No posters of the topic anywhere: fewer overall wins.
+  assert.equal(lighterSession(list, "computational"), 1);
+  assert.equal(lighterSession([], "cognitive"), 1);
+});
+
+test("sortPublicAbstracts orders posters by session, then board number", () => {
+  const sorted = sortPublicAbstracts([
+    { type: "poster", posterSession: 2, posterNumber: 1, title: "D" },
+    { type: "poster", posterNumber: 1, title: "E" },
+    { type: "poster", posterSession: 1, posterNumber: 2, title: "B" },
+    { type: "talk", title: "T" },
+    { type: "poster", posterSession: 1, posterNumber: 1, title: "C" },
+  ]);
+  assert.deepEqual(sorted.map((a) => a.title), ["T", "C", "B", "D", "E"]);
+});
+
+test("groupBySession puts talks first, then each session, then unassigned", () => {
+  const groups = groupBySession([
+    { id: "p2", type: "poster", posterSession: 2 },
+    { id: "t", type: "talk", posterSession: 1 },
+    { id: "px", type: "poster" },
+    { id: "p1", type: "poster", posterSession: 1 },
+  ]);
+  assert.deepEqual(groups.map((g) => [g.key, g.label, g.items.map((a) => a.id)]), [
+    ["talks", "Talks", ["t"]],
+    [1, "Poster session 1", ["p1"]],
+    [2, "Poster session 2", ["p2"]],
+    ["unassigned", "Posters", ["px"]],
+  ]);
+  assert.deepEqual(groupBySession([{ id: "p", type: "poster", posterSession: 2 }])
+    .map((g) => g.key), [2]);
+  assert.deepEqual(groupBySession(null), []);
+});
+
+test("posterSessionLink points at the session heading", () => {
+  assert.equal(posterSessionLink(2), "abstracts.html#poster-session-2");
 });

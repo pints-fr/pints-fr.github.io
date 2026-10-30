@@ -1,4 +1,4 @@
-import { sortPublicAbstracts, summaryAuthorLine } from "./abstract-utils.mjs";
+import { posterCode, sortPublicAbstracts, summaryAuthorLine } from "./abstract-utils.mjs";
 
 // The best-poster vote, as pure functions so the rules' decisions and the
 // admin tally can be tested without a browser. firestore.rules poster_votes/
@@ -25,11 +25,11 @@ export function eligiblePosters(publicAbstracts, voterUid) {
 export const canVoteFor = (abstract, voterUid) =>
   abstract?.type === "poster" && Boolean(voterUid) && abstract.id !== voterUid;
 
-/** "P12 · Title", for one-line mentions of a poster. */
+/** "P1-12 · Title", for one-line mentions of a poster. */
 export function posterLabel(poster) {
   if (!poster) return "a poster that is no longer listed";
-  const number = poster.posterNumber ? `P${poster.posterNumber} · ` : "";
-  return `${number}${poster.title ?? "Untitled"}`;
+  const code = posterCode(poster);
+  return `${code ? `${code} · ` : ""}${poster.title ?? "Untitled"}`;
 }
 
 /**
@@ -96,6 +96,9 @@ export function votingStats(votes, users, tally) {
 export function ballotRows(votes, users, posters) {
   const userById = new Map((users ?? []).map((u) => [u.id, u]));
   const posterById = new Map((posters ?? []).map((p) => [p.id, p]));
+  // Board order, the order sortPublicAbstracts gives; a vote for a poster no
+  // longer listed goes last.
+  const boardOrder = new Map(sortPublicAbstracts(posters ?? []).map((p, i) => [p.id, i]));
   return (votes ?? []).map((vote) => {
     const voter = userById.get(vote.id);
     const poster = posterById.get(vote.posterId);
@@ -103,12 +106,13 @@ export function ballotRows(votes, users, posters) {
       voterName: voter?.displayName ?? "(no profile)",
       voterEmail: voter?.email ?? "",
       voterAffiliation: voter?.affiliation ?? "",
-      posterNumber: poster?.posterNumber ?? "",
+      posterNumber: poster ? posterCode(poster) : "",
+      order: boardOrder.get(vote.posterId) ?? Infinity,
       posterTitle: poster?.title ?? "(no longer listed)",
       presenter: poster ? summaryAuthorLine(poster.authors) : "",
       votedAt: vote.updatedAt ?? null,
     };
   }).sort((a, b) =>
-    (Number(a.posterNumber) || Infinity) - (Number(b.posterNumber) || Infinity)
-    || String(a.voterName).localeCompare(String(b.voterName)));
+    a.order - b.order || String(a.voterName).localeCompare(String(b.voterName)))
+    .map(({ order, ...row }) => row);
 }

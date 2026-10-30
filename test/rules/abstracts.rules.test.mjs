@@ -502,7 +502,9 @@ test("the publish setting fields are checked", async () => {
 const ACCEPTED_AT = new Date("2026-11-01T10:00:00Z");
 
 // What js/db.js publicAbstract() writes, for `priv` under `mode`.
-const publicCopy = (priv, { type = "poster", posterNumber = 7, mode = "pending" } = {}) => ({
+const publicCopy = (priv, {
+  type = "poster", posterSession = 1, posterNumber = 7, mode = "pending",
+} = {}) => ({
   title: priv.title,
   affiliations: priv.affiliations,
   authors: priv.authors,
@@ -510,6 +512,7 @@ const publicCopy = (priv, { type = "poster", posterNumber = 7, mode = "pending" 
   body: mode === "full" ? priv.body : null,
   publishMode: mode,
   type,
+  posterSession: type === "poster" ? posterSession : null,
   posterNumber: type === "poster" ? posterNumber : null,
   edition: "pints2026",
   acceptedAt: ACCEPTED_AT,
@@ -577,6 +580,13 @@ test("the public copy must say what the abstract says, and no figure", async () 
   const priv = abstract({ status: "accepted", title: "Corrected title" });
   await assertFails(saveBoth(fs, priv, { ...publicCopy(priv), title: "Something else" }));
   await assertFails(saveBoth(fs, priv, { ...publicCopy(priv), figureUrl: priv.figureUrl }));
+});
+
+test("an owner cannot move their own poster session", async () => {
+  await lateConfig();
+  await seedAccepted();
+  const priv = abstract({ status: "accepted" });
+  await assertFails(saveBoth(asUser(env, "alice"), priv, publicCopy(priv, { posterSession: 2 })));
 });
 
 test("an owner cannot move their own board number or type", async () => {

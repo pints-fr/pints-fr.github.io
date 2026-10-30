@@ -189,6 +189,7 @@ export async function saveAbstract(
   batch.set(doc(db, "abstracts_public", id),
     publicAbstract(record, {
       type: republish.type,
+      posterSession: republish.posterSession,
       posterNumber: republish.posterNumber,
       acceptedAt: republish.acceptedAt,
       editClosed: republish.editClosed,
@@ -209,9 +210,12 @@ export async function saveAbstract(
  * firestore.rules publicMatches() checks an owner's write against this same
  * shape, so a key added here has to be added there too.
  */
-const publicAbstract = (abstract, { type, posterNumber, acceptedAt = null, editClosed = false }) => ({
+const publicAbstract = (abstract, {
+  type, posterSession = null, posterNumber, acceptedAt = null, editClosed = false,
+}) => ({
   ...publicFields(abstract, publicMode(abstract, { editClosed })),
   type,
+  posterSession: type === "poster" ? (posterSession ?? null) : null,
   posterNumber: type === "poster" ? posterNumber : null,
   edition: CURRENT_EDITION,
   acceptedAt: acceptedAt ?? serverTimestamp(),
@@ -342,6 +346,7 @@ export async function confirmPublishSetting(
     batch.set(doc(db, "abstracts_public", abstract.id),
       publicAbstract({ ...abstract, ...setting }, {
         type: published.type,
+        posterSession: published.posterSession ?? null,
         posterNumber: published.posterNumber ?? null,
         acceptedAt: published.acceptedAt ?? null,
         editClosed,
@@ -372,12 +377,12 @@ export const setAbstractStatus = (id, status) =>
  * did somebody last touch it".
  */
 export async function publishAbstract(
-  id, abstract, { type, posterNumber, acceptedAt = null, editClosed = false },
+  id, abstract, { type, posterSession = null, posterNumber, acceptedAt = null, editClosed = false },
 ) {
   const batch = writeBatch(db);
   batch.update(doc(db, "abstracts", id), { status: "accepted", updatedAt: serverTimestamp() });
   batch.set(doc(db, "abstracts_public", id),
-    publicAbstract(abstract, { type, posterNumber, acceptedAt, editClosed }));
+    publicAbstract(abstract, { type, posterSession, posterNumber, acceptedAt, editClosed }));
   await batch.commit();
 }
 
@@ -403,6 +408,7 @@ export async function republishAll(editClosed) {
     if (abstract?.status !== "accepted") continue;
     batch.set(doc(db, "abstracts_public", pub.id), publicAbstract(abstract, {
       type: pub.type,
+      posterSession: pub.posterSession ?? null,
       posterNumber: pub.posterNumber ?? null,
       acceptedAt: pub.acceptedAt ?? null,
       editClosed,
@@ -416,7 +422,7 @@ export async function republishAll(editClosed) {
 /**
  * Accept many abstracts as posters at once: for each, the same three writes the
  * card's Accept button makes (status, public copy, who decided). `entries` is
- * `[{ abstract, posterNumber }]`; `editClosed` is passed through to the public
+ * `[{ abstract, posterSession, posterNumber }]`; `editClosed` is passed through to the public
  * copy exactly as the single Accept passes it.
  *
  * 150 abstracts per batch keeps the 450 writes under Firestore's 500 cap. A
@@ -427,11 +433,11 @@ export async function republishAll(editClosed) {
 export async function publishAbstracts(entries, decidedBy, { editClosed = false } = {}) {
   for (let i = 0; i < entries.length; i += 150) {
     const batch = writeBatch(db);
-    for (const { abstract, posterNumber } of entries.slice(i, i + 150)) {
+    for (const { abstract, posterSession, posterNumber } of entries.slice(i, i + 150)) {
       batch.update(doc(db, "abstracts", abstract.id),
         { status: "accepted", updatedAt: serverTimestamp() });
       batch.set(doc(db, "abstracts_public", abstract.id),
-        publicAbstract(abstract, { type: "poster", posterNumber, editClosed }));
+        publicAbstract(abstract, { type: "poster", posterSession, posterNumber, editClosed }));
       batch.set(doc(db, "abstract_reviews", abstract.id),
         { decidedBy, decidedAt: serverTimestamp() }, { merge: true });
     }
@@ -439,12 +445,15 @@ export async function publishAbstracts(entries, decidedBy, { editClosed = false 
   }
 }
 
-/** Rewrite board numbers on published posters. `assignments` is `[{ id, posterNumber }]`. */
+/**
+ * Rewrite sessions and board numbers on published posters. `assignments` is
+ * `[{ id, posterSession, posterNumber }]`.
+ */
 export async function setPosterNumbers(assignments) {
   for (let i = 0; i < assignments.length; i += 500) {
     const batch = writeBatch(db);
-    for (const { id, posterNumber } of assignments.slice(i, i + 500)) {
-      batch.update(doc(db, "abstracts_public", id), { posterNumber });
+    for (const { id, posterSession, posterNumber } of assignments.slice(i, i + 500)) {
+      batch.update(doc(db, "abstracts_public", id), { posterSession, posterNumber });
     }
     await batch.commit();
   }

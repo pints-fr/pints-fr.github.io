@@ -118,6 +118,7 @@ async function showForm(abstract, published = null) {
     republish: published
       ? {
         type: published.type,
+        posterSession: published.posterSession ?? null,
         posterNumber: published.posterNumber ?? null,
         acceptedAt: published.acceptedAt ?? null,
       }

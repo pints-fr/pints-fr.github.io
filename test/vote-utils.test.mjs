@@ -30,6 +30,7 @@ test("canVoteFor mirrors eligiblePosters for one abstract", () => {
 
 test("posterLabel names a poster, or says it is gone", () => {
   assert.equal(posterLabel(poster("a", 4)), "P4 · Poster a");
+  assert.equal(posterLabel(poster("a", 4, { posterSession: 2 })), "P2-4 · Poster a");
   assert.equal(posterLabel({ title: "No number" }), "No number");
   assert.match(posterLabel(null), /no longer listed/);
 });
@@ -88,7 +89,7 @@ test("ballotRows joins voter and poster, ordered by poster then voter", () => {
       { id: "u3", displayName: "Bob" }],
     [poster("a", 1), poster("b", 2)]);
   assert.deepEqual(rows.map((r) => [r.posterNumber, r.voterName]), [
-    [1, "Bob"], [2, "Amy"], [2, "Zed"], ["", "(no profile)"],
+    ["P1", "Bob"], ["P2", "Amy"], ["P2", "Zed"], ["", "(no profile)"],
   ]);
   assert.equal(rows[3].posterTitle, "(no longer listed)");
 });

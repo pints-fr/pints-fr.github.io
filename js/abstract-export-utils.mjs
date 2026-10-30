@@ -1,4 +1,5 @@
-import { TOPIC_LABELS } from "./config.mjs";
+import { POSTER_SESSION_LABELS, TOPIC_LABELS } from "./config.mjs";
+import { posterCode } from "./abstract-utils.mjs";
 import { isScore } from "./review-utils.mjs";
 
 /**
@@ -34,6 +35,7 @@ export function annotateAbstracts(abstracts, { published = [], users = [] } = {}
     return {
       ...abstract,
       publicType: live?.type ?? null,
+      posterSession: live?.posterSession ?? null,
       posterNumber: live?.posterNumber ?? null,
       acceptedAt: live?.acceptedAt ?? null,
       submitterName: submitter?.displayName ?? "",
@@ -58,6 +60,7 @@ export const ABSTRACT_EXPORT_COLUMNS = [
   { key: "topic", label: "Topic" },
   { key: "status", label: "Status" },
   { key: "type", label: "Presentation" },
+  { key: "posterSession", label: "Poster session" },
   { key: "posterNumber", label: "Poster number" },
   { key: "presenting", label: "Presenting author" },
   { key: "authors", label: "Authors" },
@@ -81,7 +84,8 @@ export function abstractExportRows(annotated) {
     // Blank, not "poster": everything is submitted as a poster, and printing
     // that for an undecided abstract would read as a decision nobody made.
     type: a.publicType ?? "",
-    posterNumber: a.publicType === "poster" && a.posterNumber ? a.posterNumber : "",
+    posterSession: a.publicType === "poster" ? (POSTER_SESSION_LABELS[a.posterSession] ?? "") : "",
+    posterNumber: a.publicType === "poster" ? posterCode({ ...a, type: "poster" }) : "",
     presenting: presentingAuthor(a.authors),
     authors: authorsCell(a.authors),
     affiliations: (a.affiliations ?? []).map((x, i) => `${i + 1}. ${x}`).join("; "),
