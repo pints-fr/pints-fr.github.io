@@ -337,56 +337,10 @@ const TOPIC_LABELS = {
 // meeting this size and far below what makes an inbox unusable.
 const MAX_MAILED_PER_HOUR = 20;
 
-/**
- * Every organizer's address, from the registry admin rights already live in.
- *
- * **Firebase Auth is the source, not the `email` field on the admins document.**
- * That field is whatever somebody typed into the console when granting rights
- * (see "Making someone an organizer"), so it can be stale, misspelt, or simply
- * absent — and the cost of any of those is an organizer who silently never
- * receives a contact message. Auth holds the address they actually sign in with,
- * and it follows them if they change it. The recorded field stays as the
- * fallback, for a document whose uid has no Auth account behind it any more.
- *
- * An organizer who resolves to no address at all is logged rather than ignored.
- * The message still goes to everybody else — one unreachable organizer must not
- * cost the other five their mail — but "why did I not get it?" has to be
- * answerable from the logs, which the first version of this made impossible.
- */
-async function organizerEmails() {
-  const snap = await db.collection("admins").get();
-  if (snap.empty) return [];
-
-  const usable = (value) =>
-    (typeof value === "string" && value.includes("@") ? value : null);
-
-  // One batched lookup rather than a round trip per organizer.
-  const authEmail = new Map();
-  try {
-    const { users } = await getAuth().getUsers(snap.docs.map((doc) => ({ uid: doc.id })));
-    for (const user of users) authEmail.set(user.uid, usable(user.email));
-  } catch (err) {
-    // Losing the authoritative source is worth a warning; losing the message is
-    // not, so this falls through to the recorded addresses.
-    logger.warn("could not read organizer addresses from Auth; using admins/*.email",
-      { message: err?.message });
-  }
-
-  const found = [];
-  const unreachable = [];
-  for (const doc of snap.docs) {
-    const email = authEmail.get(doc.id) ?? usable(doc.data()?.email);
-    if (email) found.push(email);
-    else unreachable.push(doc.id);
-  }
-  if (unreachable.length) {
-    logger.warn("organizers with no usable email address, skipped", { uids: unreachable });
-  }
-
-  // Deduplicated: two organizers sharing a team alias is ordinary, and Gmail
-  // would otherwise be handed the same recipient twice.
-  return [...new Set(found)];
-}
+// Where every contact-form message goes: the conference's shared inbox, so
+// what one organizer answers the others can see, and granting someone admin
+// rights no longer decides who is mailed.
+const CONTACT_RECIPIENT = "pints.conference@gmail.com";
 
 /** Plain text, because this is a message to read and reply to, not a page. */
 function messageBody(data, id) {
@@ -408,7 +362,7 @@ function messageBody(data, id) {
 }
 
 /**
- * Mail a contact-form message to every organizer.
+ * Mail a contact-form message to the conference inbox, CONTACT_RECIPIENT.
  *
  * A Firestore trigger rather than a callable, and that is the whole design.
  * contact.html writes to contact_messages the way every other page on this site
@@ -457,15 +411,7 @@ export const mailContactMessage = onDocumentCreated(
       return;
     }
 
-    const to = await organizerEmails();
-    if (to.length === 0) {
-      // Not a crash: the site works before anybody has been made an organizer,
-      // and this is the state where a message arrives with nowhere to go.
-      logger.error("no organizer has an email address in admins/; message stored only",
-        { id });
-      await stamp({ deliveryError: "no recipients" });
-      return;
-    }
+    const to = [CONTACT_RECIPIENT];
 
     // Gmail, and the From below stays a @gmail.com address ON PURPOSE.
     //
@@ -507,10 +453,7 @@ export const mailContactMessage = onDocumentCreated(
       return;
     }
 
-    // The addresses, not just the count. "Three recipients" cannot answer the
-    // only question anybody asks of this log — "why did I not get it?" — and
-    // these are the organizers' own addresses in the organizers' own project.
-    logger.info("contact message mailed", { id, recipients: to.length, to });
+    logger.info("contact message mailed", { id, to });
     await stamp({ deliveredAt: FieldValue.serverTimestamp() });
   },
 );

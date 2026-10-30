@@ -54,7 +54,7 @@ paid Firebase plan; the CSV export stands in for it.
   affiliation, edit any abstract at any status, and delete an abstract or a
   participant outright. See "Editing and deleting as an organizer".
 - **Contact** — `contact.html` takes a name, an address, a topic and a message
-  and mails it to every organizer, with Reply-To set to the sender. Reachable
+  and mails it to pints.conference@gmail.com, with Reply-To set to the sender. Reachable
   from the home page hero and the footer of every page. See "Contacting the
   organizers" — **the mail needs two SMTP secrets set before `functions/` is
   deployed at all.**
@@ -514,10 +514,11 @@ photo clarity behind the type; the band's edges are unaffected either way.
 ## Contacting the organizers
 
 `contact.html` takes a name, an email address, a topic and a message, and mails
-it to **every organizer** — everyone with a document in `admins`, using the
-`email` field recorded there. Granting somebody admin rights in Settings adds
-them to the contact recipients; there is no second list to maintain, and no
-address appears in the page source for harvesters to collect.
+it to **the conference inbox, pints.conference@gmail.com** — `CONTACT_RECIPIENT`
+in `functions/index.js`. It is one shared inbox rather than every organizer, so
+an answered message is visible to everyone who reads it, and admin rights no
+longer decide who is mailed. The address lives only in the function, so it does
+not appear in the page source for harvesters to collect.
 
 **Reply-To is the sender**, so answering is one click and the reply goes to the
 visitor rather than to the mailbox the site sends from. The subject is
@@ -538,7 +539,7 @@ turns out to be the wrong call — nothing else has to change.
 ### How a message gets out
 
 ```
-contact.html  ──write──>  contact_messages/{id}  ──trigger──>  mailContactMessage  ──> every admins/*.email
+contact.html  ──write──>  contact_messages/{id}  ──trigger──>  mailContactMessage  ──> pints.conference@gmail.com
                             (firestore.rules)                   (functions/, SMTP)      Reply-To: the sender
 ```
 
@@ -594,8 +595,8 @@ messages a day, which is ample. Revoke the app password from the Google account
 page if the organizer holding it changes.
 
 **Send one real message before announcing the page**, and confirm it arrives at
-every organizer, that **Reply** addresses the visitor, and that it is not
-quarantined. An `@ens.psl.eu` recipient is the test that matters.
+pints.conference@gmail.com, that **Reply** addresses the visitor, and that the
+reply reaches them — a visitor at `@ens.psl.eu` is the test that matters.
 
 Until the secrets exist, the sensible thing is to ship the page without the
 mailer: everything except `functions/index.js` and its `nodemailer` dependency
@@ -688,7 +689,7 @@ a client, and `storage.rules` scopes figure deletion to the uploader. So
 | `listUnverifiedParticipants` | which registered uids Firebase Auth has not marked email-confirmed — read by the Participants tab to decide who gets the **Confirm email** button |
 | `verifyParticipantEmail` | marks a participant's email confirmed by hand and publishes them immediately — for the address a verification mail never reaches at all, see "Register first, then submit" |
 | `backfillParticipants` | every five minutes, publishes verified participants who never loaded `account.html` — see "Being listed without ever loading account.html" |
-| `mailContactMessage` | mails a contact-form message to every organizer — see "Contacting the organizers". **Binds two SMTP secrets: set them before deploying anything here** |
+| `mailContactMessage` | mails a contact-form message to pints.conference@gmail.com — see "Contacting the organizers". **Binds two SMTP secrets: set them before deploying anything here** |
 | `syncDropboxGallery` | **temporarily removed** — see below |
 
 Five of them are here because they must **bypass the rules**: the deletes act on
