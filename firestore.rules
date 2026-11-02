@@ -63,6 +63,20 @@ service cloud.firestore {
             && request.time < cfg.get('editingDeadline', request.time));
     }
 
+    // A late-editing grant: an organizer reopening the editing window for ONE
+    // participant after it has closed for everybody else (Admin > Settings,
+    // see edit_grants/ below). Only the owner's own grant counts, and only
+    // until it expires. What it opens is exactly what editWindowOpen() opens —
+    // editing, retracting, the publish choice — never a new submission, and
+    // never a resubmission: the status pinning below keys on
+    // submissionWindowOpen(), which a grant does not touch.
+    function lateEditGranted(uid) {
+      let path = /databases/$(database)/documents/edit_grants/$(uid);
+      return exists(path) && get(path).data.expiresAt > request.time;
+    }
+
+    function canEdit(uid) { return editWindowOpen() || lateEditGranted(uid); }
+
     // Whether new people may register, from config/site.registrationOpen. Unlike
     // submissionWindowOpen() this fails OPEN: a missing document or a missing
     // field means open, because the switch was added after the site went live
@@ -133,14 +147,15 @@ service cloud.firestore {
 
     // How an accepted abstract is shown publicly, as its OWNER must write it.
     // A confirmed choice is honoured; an unconfirmed one is held back as
-    // 'pending' (title and authors only). The default, 'full', is applied to
-    // unconfirmed abstracts by an organizer after the editing window closes —
-    // an owner can only write while it is open, so for them it never applies.
+    // 'pending' (title and authors only) while the editing window is open. The
+    // default, 'full', applies once it has closed — an organizer applies it to
+    // everybody then, and an owner writing on a late-editing grant must not
+    // knock their own listing back to 'pending' afterwards.
     // The owner-side half of js/abstract-utils.mjs publicMode().
     function expectedMode(priv) {
       return priv.get('publishConfirmed', false) == true
         ? priv.get('publishChoice', 'full')
-        : 'pending';
+        : (editWindowOpen() ? 'pending' : 'full');
     }
 
     // Whether a public copy is exactly what js/db.js publicAbstract() builds
@@ -316,6 +331,25 @@ service cloud.firestore {
             .data.get('registrationLink', null) == token;
     }
 
+    // Late-editing grants: an organizer reopening editing for one participant
+    // after the editing window has closed. The document id IS the participant's
+    // uid, so lateEditGranted() finds it with a plain get and nothing on the
+    // abstract has to change shape. The link the organizer sends is just
+    // submit.html?edit=1 — the grant is the capability, so a forwarded link is
+    // useless to anybody else. Generating again overwrites (extends) it;
+    // revoking is deleting.
+    //
+    // The owner may read their own, so their pages can say until when.
+    match /edit_grants/{uid} {
+      allow get: if isOwner(uid) || isAdmin();
+      allow list, delete: if isAdmin();
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['createdBy', 'createdAt', 'expiresAt'])
+        && request.resource.data.keys().hasAll(['createdBy', 'expiresAt'])
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.expiresAt is timestamp;
+    }
+
     // ONE abstract per participant, and the document id IS their uid. That is
     // what makes the limit real rather than advisory: there is no second slot to
     // create, so no rule has to count anything, and Firestore rules cannot count
@@ -343,7 +377,8 @@ service cloud.firestore {
         && request.resource.data.status == 'submitted';
 
       // Changing an abstract after it is in: only inside the editing window
-      // (editWindowOpen() above), which outlives the submission window by as
+      // (editWindowOpen() above, or the owner's own late-editing grant), which
+      // outlives the submission window by as
       // long as the organizers set. Three shapes, one per kind of abstract:
       //
       //  - Still pending, inside the SUBMISSION window: a (re)submission, so
@@ -362,7 +397,7 @@ service cloud.firestore {
       // writes 'submitted'), but a document from before the change still holds
       // it, and dropping it from this list would freeze that document out of
       // its owner's hands forever.
-      allow update: if isVerified() && editWindowOpen()
+      allow update: if isVerified() && canEdit(uid)
         && isOwner(uid)
         && validAbstract(request.resource.data, uid)
         && ((resource.data.status in ['submitted', 'rejected', 'withdrawn']
@@ -378,7 +413,7 @@ service cloud.firestore {
       // Retracting, inside the editing window. An accepted POSTER may be
       // retracted, but only in the batch that takes its public copy down too;
       // an accepted talk may not, because the programme is built around it.
-      allow delete: if isOwner(uid) && editWindowOpen()
+      allow delete: if isOwner(uid) && canEdit(uid)
         && (resource.data.status != 'accepted'
             || (get(/databases/$(database)/documents/abstracts_public/$(uid)).data.type == 'poster'
                 && !existsAfter(/databases/$(database)/documents/abstracts_public/$(uid))));
@@ -404,7 +439,7 @@ service cloud.firestore {
     match /abstracts_public/{abstractId} {
       allow read: if true;
       allow write: if isAdmin();
-      allow update: if isVerified() && editWindowOpen()
+      allow update: if isVerified() && canEdit(abstractId)
         && isOwner(abstractId)
         && request.resource.data.type == resource.data.type
         && request.resource.data.get('posterNumber', null)
@@ -418,7 +453,7 @@ service cloud.firestore {
             .data.status == 'accepted'
         && publicMatches(request.resource.data,
              getAfter(/databases/$(database)/documents/abstracts/$(abstractId)).data);
-      allow delete: if isOwner(abstractId) && editWindowOpen()
+      allow delete: if isOwner(abstractId) && canEdit(abstractId)
         && resource.data.type == 'poster'
         && !existsAfter(/databases/$(database)/documents/abstracts/$(abstractId));
     }

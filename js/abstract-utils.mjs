@@ -347,20 +347,34 @@ const asDate = (value) => value?.toDate?.() ?? (value instanceof Date ? value : 
  * typo, and a config written before the editing fields existed behaves exactly
  * as it did then. Missing editing fields mean closed, never open.
  *
- * Mirrors submissionWindowOpen() and editWindowOpen() in firestore.rules, which
- * are the real boundary; this only decides what the pages offer.
+ * `grant` is the participant's own late-editing grant (edit_grants/{uid}), if
+ * any: it opens `editOpen` for them alone until it expires. `editClosed` stays
+ * the window everybody shares, because that is what decides whether an
+ * unconfirmed publish choice falls to the default — a late editor must not
+ * pull their own listing back to "pending". `lateEditUntil` is the grant's
+ * expiry while it is what keeps editing open, for the pages to show.
+ * Organizer screens pass no grant and see the shared window only.
+ *
+ * Mirrors submissionWindowOpen(), editWindowOpen() and lateEditGranted() in
+ * firestore.rules, which are the real boundary; this only decides what the
+ * pages offer.
  */
-export function submissionWindows(config, now = new Date()) {
+export function submissionWindows(config, now = new Date(), grant = null) {
   const deadline = asDate(config?.submissionDeadline);
   const editingDeadline = asDate(config?.editingDeadline);
+  const grantUntil = asDate(grant?.expiresAt);
   const submitOpen = Boolean(config?.submissionsOpen) && (!deadline || now < deadline);
   const editingOpen = config?.editingOpen === true
     && Boolean(editingDeadline) && now < editingDeadline;
+  const sharedOpen = submitOpen || editingOpen;
+  const granted = Boolean(grantUntil) && now < grantUntil;
   return {
     submitOpen,
-    editOpen: submitOpen || editingOpen,
+    editOpen: sharedOpen || granted,
+    editClosed: !sharedOpen,
     deadline,
     editingDeadline,
+    lateEditUntil: granted && !sharedOpen ? grantUntil : null,
   };
 }
 

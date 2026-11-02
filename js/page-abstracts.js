@@ -2,7 +2,7 @@ import { mountLayout, setAuthLink } from "./layout.js";
 import { warnIfUnconfigured } from "./firebase.js";
 import { onUser } from "./auth.js";
 import {
-  getMyAbstract, getPublicAbstract, getSiteConfig, listPublicAbstracts, retractAbstract,
+  getMyAbstract, getMyEditGrant, getPublicAbstract, getSiteConfig, listPublicAbstracts, retractAbstract,
 } from "./db.js";
 import {
   abstractAnchor, filterAbstracts, groupBySession, posterSessionAnchor, retractQuestion,
@@ -123,7 +123,7 @@ async function renderSubmitPanel(user) {
 
   // The config is read signed out too: it is what says whether the submit
   // button should be offered at all.
-  const [mine, config] = await Promise.all([
+  const [mine, config, grant] = await Promise.all([
     user
       ? getMyAbstract(user.uid).catch((err) => {
         console.error("[pints] getMyAbstract", err);
@@ -134,13 +134,14 @@ async function renderSubmitPanel(user) {
       console.error("[pints] getSiteConfig", err);
       return null;
     }),
+    user ? getMyEditGrant(user.uid) : null,
   ]);
 
   if (token !== submitPanelToken) return; // superseded by a later auth state
 
   if (mine) {
     submitCtaBlockEl.hidden = true;
-    const windows = submissionWindows(config);
+    const windows = submissionWindows(config, new Date(), grant);
     await mountSubmissionCard(myAbstractEl, mine, {
       windows,
       onEdit: () => { location.href = "submit.html?edit=1"; },

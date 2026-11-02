@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
-  isRegistrationOpen, linkStatus, newLinkToken, registrationLinkUrl,
+  editLinkUrl, grantStatus, isRegistrationOpen, linkStatus, newLinkToken, registrationLinkUrl,
 } from "../js/registration-utils.mjs";
 
 test("registration is open when there is no config at all", () => {
@@ -52,4 +52,17 @@ test("tokens are lowercase hex, two digits a byte", () => {
 test("the link points at register.html next to the admin page", () => {
   assert.equal(registrationLinkUrl("https://pints.fr/admin.html#settings", "abc"),
     "https://pints.fr/register.html?link=abc");
+});
+
+test("a late-editing grant is active until it expires", () => {
+  const now = new Date("2026-11-02T12:00:00Z");
+  assert.equal(grantStatus({ expiresAt: new Date("2026-11-03T00:00:00Z") }, now), "active");
+  assert.equal(grantStatus({ expiresAt: { toDate: () => new Date("2026-11-01T00:00:00Z") } }, now),
+    "expired");
+  assert.equal(grantStatus({}, now), "expired");
+});
+
+test("the late-editing link opens the editor next to the admin page", () => {
+  assert.equal(editLinkUrl("https://pints.fr/admin.html#settings"),
+    "https://pints.fr/submit.html?edit=1");
 });

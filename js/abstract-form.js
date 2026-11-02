@@ -7,7 +7,7 @@ import {
 import { draftFingerprint, retractQuestion, submissionWindows } from "./abstract-utils.mjs";
 import { validateFigure } from "./figure-utils.mjs";
 import { abstractCard } from "./abstract-card.js";
-import { getSiteConfig, retractAbstract, saveAbstract } from "./db.js";
+import { getMyEditGrant, getSiteConfig, retractAbstract, saveAbstract } from "./db.js";
 import { deleteFigure, uploadFigure } from "./storage.js";
 
 const TEMPLATE = `
@@ -307,19 +307,25 @@ export async function mountAbstractForm(
   };
 
   // Two windows: submitting a NEW abstract, and changing one already in
-  // (editing, retracting, the publish setting). The second outlives the first.
-  const config = await getSiteConfig();
+  // (editing, retracting, the publish setting). The second outlives the first,
+  // and an organizer's late-editing grant can reopen it for its owner alone —
+  // so the grant is only looked up when the person editing owns the abstract.
+  const ownGrant = abstract && (abstract.ownerUid ?? user?.uid) === user?.uid;
+  const [config, grant] = await Promise.all([
+    getSiteConfig(), ownGrant ? getMyEditGrant(user.uid) : null,
+  ]);
   const submissionsOpen = Boolean(config?.submissionsOpen);
-  const windows = submissionWindows(config);
-  const { deadline, editingDeadline } = windows;
+  const windows = submissionWindows(config, new Date(), grant);
+  const { deadline, editingDeadline, lateEditUntil } = windows;
   const when = (date) => date.toLocaleString("en-GB");
 
   $("#window-note").textContent = windows.submitOpen
     ? `Submissions are open${deadline ? ` until ${when(deadline)}` : ""}.`
-    : windows.editOpen && abstract && editingDeadline
-      ? `Submissions are closed. You can edit or retract your abstract until ${when(editingDeadline)}.`
+    : windows.editOpen && abstract && (lateEditUntil ?? editingDeadline)
+      ? `Submissions are closed. You can edit or retract your abstract until ${
+        when(lateEditUntil ?? editingDeadline)}.`
       : "Submissions are closed.";
-  $("#abs-pub-hint").textContent = editingDeadline
+  $("#abs-pub-hint").textContent = editingDeadline && !windows.editClosed
     ? `If you have not confirmed by ${when(editingDeadline)}, the first option applies.`
     : "If you do not confirm, the first option applies.";
 
@@ -628,7 +634,7 @@ export async function mountAbstractForm(
             ? (abstract?.status ?? "submitted")
             : "submitted",
           createdAt: abstract?.createdAt ?? null,
-          republish: accepted ? { ...republish, editClosed: !windows.editOpen } : null,
+          republish: accepted ? { ...republish, editClosed: windows.editClosed } : null,
         },
       );
       say(editingSomeoneElse

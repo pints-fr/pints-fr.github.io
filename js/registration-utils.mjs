@@ -44,3 +44,23 @@ export function registrationLinkUrl(baseHref, token) {
   url.searchParams.set("link", token);
   return url.href;
 }
+
+// ------------------------------------------------------ late-editing links
+//
+// The editing counterpart, also from Admin > Settings: a grant that reopens
+// editing for ONE participant until it expires (edit_grants/{uid}, honoured by
+// lateEditGranted() in firestore.rules). The grant is the capability, so the
+// link itself is just the editor's address: forwarded, it opens nothing.
+
+/** "active" or "expired", for an edit_grants document. */
+export function grantStatus(grant, now = new Date()) {
+  const expires = grant?.expiresAt?.toDate?.() ?? grant?.expiresAt;
+  return expires instanceof Date && expires > now ? "active" : "expired";
+}
+
+/** The address to send with a grant, resolved against the page generating it. */
+export function editLinkUrl(baseHref) {
+  const url = new URL("submit.html", baseHref);
+  url.searchParams.set("edit", "1");
+  return url.href;
+}

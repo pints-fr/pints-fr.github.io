@@ -631,6 +631,41 @@ export async function listRegistrationLinks() {
 export const deleteRegistrationLink = (token) =>
   deleteDoc(doc(db, "registration_links", token));
 
+// ----------------------------------------------------- late-editing grants
+//
+// edit_grants/{uid}: an organizer reopening editing for one participant after
+// the editing window has closed. firestore.rules lateEditGranted() is what
+// honours it; the link sent with it is just submit.html?edit=1.
+
+/** Grant (or extend) late editing for `uid`, `hours` from now. */
+export const createEditGrant = (adminUid, uid, hours) =>
+  setDoc(doc(db, "edit_grants", uid), {
+    createdBy: adminUid,
+    createdAt: serverTimestamp(),
+    expiresAt: new Date(Date.now() + hours * 3600_000),
+  });
+
+/**
+ * The signed-in participant's own grant, or null. A failed read is null too:
+ * the pages then offer only the shared window, and the rules decide anyway.
+ */
+export async function getMyEditGrant(uid) {
+  try {
+    const snap = await getDoc(doc(db, "edit_grants", uid));
+    return snap.exists() ? snapData(snap) : null;
+  } catch (err) {
+    console.error("[pints] getMyEditGrant", err);
+    return null;
+  }
+}
+
+export async function listEditGrants() {
+  return (await getDocs(collection(db, "edit_grants"))).docs.map(snapData);
+}
+
+/** Revoke a grant. Deleting it is all revoking takes. */
+export const deleteEditGrant = (uid) => deleteDoc(doc(db, "edit_grants", uid));
+
 // ----------------------------------------------------------------- settings
 
 /**

@@ -404,6 +404,29 @@ test("submissionWindows: a missing config is closed", () => {
   assert.deepEqual(pick(submissionWindows(null, NOW)), { submitOpen: false, editOpen: false });
 });
 
+test("submissionWindows: a late-editing grant reopens editing for its holder only", () => {
+  const closed = { submissionsOpen: false, editingOpen: true, editingDeadline: ts(PAST) };
+  const w = submissionWindows(closed, NOW, { expiresAt: ts(BEFORE) });
+  assert.deepEqual(pick(w), { submitOpen: false, editOpen: true });
+  // The shared window is still closed, so an unconfirmed choice is not held back.
+  assert.equal(w.editClosed, true);
+  assert.equal(w.lateEditUntil, BEFORE);
+  assert.equal(submissionWindows(closed, NOW).editOpen, false);
+});
+
+test("submissionWindows: an expired grant opens nothing", () => {
+  const w = submissionWindows({}, NOW, { expiresAt: ts(PAST) });
+  assert.deepEqual(pick(w), { submitOpen: false, editOpen: false });
+  assert.equal(w.lateEditUntil, null);
+});
+
+test("submissionWindows: a grant inside the shared window changes nothing", () => {
+  const cfg = { editingOpen: true, editingDeadline: ts(BEFORE) };
+  const w = submissionWindows(cfg, NOW, { expiresAt: ts(BEFORE) });
+  assert.equal(w.editClosed, false);
+  assert.equal(w.lateEditUntil, null);
+});
+
 function pick({ submitOpen, editOpen }) { return { submitOpen, editOpen }; }
 
 // ----------------------------------------------------------------- ownerCan

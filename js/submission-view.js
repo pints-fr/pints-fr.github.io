@@ -81,7 +81,7 @@ export async function mountSubmissionCard(host, abstract, options) {
       shortcut.disabled = true;
       try {
         await confirmPublishSetting(abstract, "titleOnly", {
-          published, editClosed: !windows?.editOpen,
+          published, editClosed: windows?.editClosed ?? true,
         });
         await mountSubmissionCard(host,
           { ...abstract, publishChoice: "titleOnly", publishConfirmed: true }, options);
@@ -126,8 +126,9 @@ function actionNote(abstract, published, windows, can) {
   if (!can.retract) {
     return "Talks cannot be retracted. Contact the organizers if you cannot give yours.";
   }
-  const until = windows.editingDeadline && !windows.submitOpen
-    ? ` You can edit or retract it until ${windows.editingDeadline.toLocaleString("en-GB")}.`
+  const untilDate = windows.lateEditUntil ?? windows.editingDeadline;
+  const until = untilDate && !windows.submitOpen
+    ? ` You can edit or retract it until ${untilDate.toLocaleString("en-GB")}.`
     : "";
   return `If you retract the poster you won’t be able to present it.${until}`;
 }
@@ -141,7 +142,7 @@ function publishLine(abstract, windows) {
     : "title, authors and the full abstract";
   if (abstract.publishConfirmed === true) {
     line.textContent = `Public listing: ${choice} (confirmed). The figure is never public.`;
-  } else if (!windows?.editOpen) {
+  } else if (windows?.editClosed ?? true) {
     line.textContent = "Public listing: title, authors and the full abstract — the "
       + "default, as no choice was confirmed. The figure is never public.";
   } else {

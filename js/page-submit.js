@@ -1,7 +1,9 @@
 import { mountLayout, setAuthLink } from "./layout.js";
 import { warnIfUnconfigured } from "./firebase.js";
 import { checkIsAdmin, refreshVerification, requireUser, sendVerification } from "./auth.js";
-import { getMyAbstract, getProfile, getPublicAbstract, getSiteConfig } from "./db.js";
+import {
+  getMyAbstract, getMyEditGrant, getProfile, getPublicAbstract, getSiteConfig,
+} from "./db.js";
 import { ownerCan, submissionWindows } from "./abstract-utils.mjs";
 import { mountAbstractForm } from "./abstract-form.js";
 import { mountSubmissionCard } from "./submission-view.js";
@@ -36,7 +38,7 @@ const say = (text, kind = "ok") => {
 
 // Everything mount() learned, so the card and the editor can be swapped without
 // re-reading the profile each time. `windows` is submissionWindows() of the
-// site config, which decides what the card offers.
+// site config and any late-editing grant, which decides what the card offers.
 const state = { user: null, isAdmin: false, profile: null, windows: null };
 
 if (!warnIfUnconfigured(msg)) {
@@ -53,14 +55,14 @@ if (!warnIfUnconfigured(msg)) {
 }
 
 async function mount(user, isAdmin) {
-  const [profile, mine, config] = await Promise.all([
-    getProfile(user.uid), getMyAbstract(user.uid), getSiteConfig(),
+  const [profile, mine, config, grant] = await Promise.all([
+    getProfile(user.uid), getMyAbstract(user.uid), getSiteConfig(), getMyEditGrant(user.uid),
   ]);
 
   state.user = user;
   state.isAdmin = isAdmin;
   state.profile = profile;
-  state.windows = submissionWindows(config);
+  state.windows = submissionWindows(config, new Date(), grant);
 
   // Clicking the verification link does not update the token this tab already
   // holds, so ask for a fresh one before deciding anything on it.

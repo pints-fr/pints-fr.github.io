@@ -672,3 +672,87 @@ test("the shortcut is refused once editing closes", async () => {
   await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
   await assertFails(updateDoc(doc(asUser(env, "alice"), "abstracts", "alice"), shortcut));
 });
+
+// ------------------------------------------------------ late-editing grants
+//
+// Everything closed for everybody; an organizer has reopened editing for one
+// participant with edit_grants/{uid}.
+
+const closedConfig = () => seedConfig(env, {
+  open: true, deadline: PAST, editing: true, editDeadline: PAST,
+});
+
+const seedGrant = (uid = "alice", expiresAt = FUTURE) =>
+  seed(env, (fs) => setDoc(doc(fs, "edit_grants", uid),
+    { createdBy: "boss", createdAt: new Date(), expiresAt }));
+
+test("a late-editing grant lets its holder edit and retract after editing closes", async () => {
+  await closedConfig();
+  await seedGrant();
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
+  const fs = asUser(env, "alice");
+  await assertSucceeds(setDoc(doc(fs, "abstracts", "alice"), abstract({ title: "Late fix" })));
+  await assertSucceeds(deleteDoc(doc(fs, "abstracts", "alice")));
+});
+
+test("a grant opens nothing for anybody else", async () => {
+  await closedConfig();
+  await seedGrant("alice");
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "bob"), abstract({ ownerUid: "bob" })));
+  await assertFails(setDoc(doc(asUser(env, "bob"), "abstracts", "bob"),
+    abstract({ ownerUid: "bob", title: "Me too" })));
+});
+
+test("an expired grant opens nothing", async () => {
+  await closedConfig();
+  await seedGrant("alice", PAST);
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
+  await assertFails(setDoc(doc(asUser(env, "alice"), "abstracts", "alice"),
+    abstract({ title: "Too late" })));
+});
+
+test("a grant never allows a new submission or a resubmission", async () => {
+  await closedConfig();
+  await seedGrant();
+  const fs = asUser(env, "alice");
+  await assertFails(setDoc(doc(fs, "abstracts", "alice"), abstract()));
+  await seed(env, (db) => setDoc(doc(db, "abstracts", "alice"), abstract({ status: "rejected" })));
+  await assertFails(setDoc(doc(fs, "abstracts", "alice"),
+    abstract({ status: "submitted", title: "Back into review?" })));
+  await assertSucceeds(setDoc(doc(fs, "abstracts", "alice"),
+    abstract({ status: "rejected", title: "Corrected" })));
+});
+
+test("a grant still needs a confirmed address", async () => {
+  await closedConfig();
+  await seedGrant();
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts", "alice"), abstract()));
+  await assertFails(setDoc(doc(asUser(env, "alice", { verified: false }), "abstracts", "alice"),
+    abstract({ title: "Late fix" })));
+});
+
+// After the shared window closes the organizers publish unconfirmed abstracts
+// in full; a late editor saving without confirming must keep it that way.
+test("a late edit of an unconfirmed accepted abstract keeps it published in full", async () => {
+  await closedConfig();
+  await seedGrant();
+  await seedAccepted();
+  const fs = asUser(env, "alice");
+  const priv = abstract({ status: "accepted", title: "Corrected title" });
+  await assertFails(saveBoth(fs, priv, publicCopy(priv, { mode: "pending" })));
+  await assertSucceeds(saveBoth(fs, priv, publicCopy(priv, { mode: "full" })));
+});
+
+test("only an organizer can grant, list or revoke late editing", async () => {
+  await seedAdmin(env, "boss");
+  const grant = { createdBy: "alice", expiresAt: FUTURE };
+  await assertFails(setDoc(doc(asUser(env, "alice"), "edit_grants", "alice"), grant));
+  await assertFails(getDocs(collection(asUser(env, "alice"), "edit_grants")));
+  const boss = asUser(env, "boss");
+  await assertFails(setDoc(doc(boss, "edit_grants", "alice"), grant)); // createdBy must be them
+  await assertSucceeds(setDoc(doc(boss, "edit_grants", "alice"), { ...grant, createdBy: "boss" }));
+  await assertSucceeds(getDoc(doc(asUser(env, "alice"), "edit_grants", "alice")));
+  await assertFails(getDoc(doc(asUser(env, "bob"), "edit_grants", "alice")));
+  await assertFails(deleteDoc(doc(asUser(env, "alice"), "edit_grants", "alice")));
+  await assertSucceeds(deleteDoc(doc(boss, "edit_grants", "alice")));
+});

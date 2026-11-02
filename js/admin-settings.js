@@ -1,10 +1,11 @@
 import {
-  addAdmin, createRegistrationLink, deleteRegistrationLink, getSiteConfig,
-  listRegistrationLinks, listUsers, republishAll, saveSiteConfig,
+  addAdmin, createEditGrant, createRegistrationLink, deleteEditGrant, deleteRegistrationLink,
+  getSiteConfig, listAbstracts, listEditGrants, listRegistrationLinks, listUsers, republishAll,
+  saveSiteConfig,
 } from "./db.js";
 import { submissionWindows } from "./abstract-utils.mjs";
 import {
-  isRegistrationOpen, LINK_DURATIONS, linkStatus, registrationLinkUrl,
+  editLinkUrl, grantStatus, isRegistrationOpen, LINK_DURATIONS, linkStatus, registrationLinkUrl,
 } from "./registration-utils.mjs";
 
 export async function mountSettingsTab(host, { adminUid }) {
@@ -88,6 +89,33 @@ export async function mountSettingsTab(host, { adminUid }) {
       <input id="cfg-edit-deadline" type="datetime-local">
       <div class="actions"><button type="submit" id="edit-save">Save editing window</button></div>
     </form>
+
+    <h3>Late editing link</h3>
+    <p class="muted">For somebody who needs to change their abstract after the editing window
+      has closed. Reopens editing and retracting for that one participant until it expires;
+      it never lets anybody submit a new abstract or put a rejected one back into review.
+      Generating again for the same person extends it. Send the link to them yourself — it
+      only works for the person it was generated for.</p>
+    <form id="grant-form" novalidate>
+      <label for="grant-uid">Participant</label>
+      <select id="grant-uid"><option value="">Loading…</option></select>
+      <label for="grant-hours">Valid for</label>
+      <select id="grant-hours">
+        ${LINK_DURATIONS.map((d) => `<option value="${d.hours}">${d.label}</option>`).join("")}
+      </select>
+      <div class="actions"><button type="submit" id="grant-make">Generate link</button></div>
+    </form>
+    <div id="grant-out" hidden>
+      <label for="grant-url">Link for <span id="grant-who"></span></label>
+      <input id="grant-url" type="text" readonly>
+      <div class="actions"><button type="button" id="grant-copy" class="secondary">Copy link</button></div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Participant</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+        <tbody id="grant-rows"></tbody>
+      </table>
+    </div>
 
     <h3>Publish settings</h3>
     <p class="muted">Rewrites every accepted abstract on the public list from what its
@@ -238,14 +266,15 @@ export async function mountSettingsTab(host, { adminUid }) {
 
   // The Clipboard API needs a secure context and a permission some browsers
   // withhold; when it is refused, the text is selected so Ctrl/Cmd-C works.
-  async function copyLink(url) {
-    linkUrl.value = url;
-    linkOut.hidden = false;
+  async function copyLink(url, { out = linkOut, input = linkUrl,
+    done = "Link copied. It works once, for one person." } = {}) {
+    input.value = url;
+    out.hidden = false;
     try {
       await navigator.clipboard.writeText(url);
-      say("Link copied. It works once, for one person.", "ok");
+      say(done, "ok");
     } catch {
-      linkUrl.select();
+      input.select();
       say("Could not copy automatically. The link is selected: copy it by hand.", "warn");
     }
   }
@@ -277,6 +306,126 @@ export async function mountSettingsTab(host, { adminUid }) {
       console.error("[pints] createRegistrationLink", err);
     } finally {
       linkMake.disabled = false;
+    }
+  });
+
+  const grantOut = host.querySelector("#grant-out");
+  const grantUrl = host.querySelector("#grant-url");
+  const grantWho = host.querySelector("#grant-who");
+  const grantRows = host.querySelector("#grant-rows");
+  const grantUidEl = host.querySelector("#grant-uid");
+  const copyGrant = (name) => copyLink(editLinkUrl(location.href), {
+    out: grantOut, input: grantUrl,
+    done: `Link copied. It lets ${name} edit until the grant expires.`,
+  });
+  // uid -> display name, filled by renderGrants() and shared with the form.
+  let grantNames = new Map();
+
+  /**
+   * The participant picker (people with an abstract this edition — nobody
+   * else has anything to edit) and every grant, latest expiry first.
+   */
+  async function renderGrants() {
+    const [grants, users, abstracts] = await Promise.all(
+      [listEditGrants(), listUsers(), listAbstracts()]);
+    grantNames = new Map(users.map((u) => [u.id, u.displayName || u.email || u.id]));
+    const nameOf = (uid) => grantNames.get(uid) ?? uid;
+
+    const owners = [...new Set(abstracts.map((a) => a.ownerUid ?? a.id))]
+      .sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+    const picked = grantUidEl.value;
+    grantUidEl.replaceChildren(new Option(
+      owners.length ? "Choose a participant…" : "Nobody has submitted an abstract", ""));
+    for (const uid of owners) {
+      const title = abstracts.find((a) => (a.ownerUid ?? a.id) === uid)?.title;
+      grantUidEl.append(new Option(title ? `${nameOf(uid)} — ${title}` : nameOf(uid), uid));
+    }
+    grantUidEl.value = owners.includes(picked) ? picked : "";
+
+    grants.sort((a, b) => (b.expiresAt?.toMillis?.() ?? 0) - (a.expiresAt?.toMillis?.() ?? 0));
+    grantRows.replaceChildren();
+    for (const grant of grants) {
+      const status = grantStatus(grant);
+      const tr = document.createElement("tr");
+      for (const value of [nameOf(grant.id), when(grant.expiresAt),
+        status === "active" ? "Can edit" : "Expired"]) {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.append(td);
+      }
+      const td = document.createElement("td");
+      td.className = "tools";
+      if (status === "active") {
+        const copy = document.createElement("button");
+        copy.className = "secondary";
+        copy.textContent = "Copy";
+        copy.addEventListener("click", () => {
+          grantWho.textContent = nameOf(grant.id);
+          copyGrant(nameOf(grant.id));
+        });
+        td.append(copy, " ");
+      }
+      // Expired grants can be removed too, to keep the list short.
+      const revoke = document.createElement("button");
+      revoke.className = "secondary";
+      revoke.textContent = status === "active" ? "Revoke" : "Remove";
+      revoke.addEventListener("click", async () => {
+        revoke.disabled = true;
+        try {
+          await deleteEditGrant(grant.id);
+          say(status === "active"
+            ? `Revoked. ${nameOf(grant.id)} can no longer edit.` : "Removed.", "ok");
+          await renderGrants();
+        } catch (err) {
+          say("Could not revoke that grant.", "err");
+          console.error("[pints] deleteEditGrant", err);
+          revoke.disabled = false;
+        }
+      });
+      td.append(revoke);
+      tr.append(td);
+      grantRows.append(tr);
+    }
+    if (!grants.length) {
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 4;
+      td.className = "muted";
+      td.textContent = "No late editing links generated yet.";
+      tr.append(td);
+      grantRows.append(tr);
+    }
+  }
+
+  renderGrants().catch((err) => {
+    say("Could not load the late editing links.", "err");
+    console.error("[pints] listEditGrants", err);
+  });
+
+  host.querySelector("#grant-copy").addEventListener("click", () => copyGrant(grantWho.textContent));
+
+  host.querySelector("#grant-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const uid = grantUidEl.value;
+    if (!uid) return say("Choose a participant first.", "err");
+    const grantMake = host.querySelector("#grant-make");
+    grantMake.disabled = true;
+    try {
+      const hours = Number(host.querySelector("#grant-hours").value);
+      await createEditGrant(adminUid, uid, hours);
+      const name = grantNames.get(uid) ?? uid;
+      // Shown before the copy is attempted, as for registration links.
+      grantWho.textContent = name;
+      grantUrl.value = editLinkUrl(location.href);
+      grantOut.hidden = false;
+      say(`${name} can now edit their abstract.`, "ok");
+      await renderGrants();
+      copyGrant(name);
+    } catch (err) {
+      say("Could not generate a late editing link.", "err");
+      console.error("[pints] createEditGrant", err);
+    } finally {
+      grantMake.disabled = false;
     }
   });
 
