@@ -114,6 +114,21 @@ service cloud.firestore {
         && getAfter(path).data.get('usedBy', null) == request.auth.uid;
     }
 
+    // The same for an abstract: whether this create spends a late-submission
+    // link, letting ONE person submit after submissions have closed (Admin >
+    // Settings; see submission_links/ below). get() and getAfter() split the
+    // work exactly as in redeemsLink(): unused and unexpired before the batch,
+    // stamped with this user's uid by it.
+    function redeemsSubmissionLink(data) {
+      let path = /databases/$(database)/documents/submission_links/$(data.submissionLink);
+      return 'submissionLink' in data
+        && data.submissionLink is string
+        && exists(path)
+        && !('usedBy' in get(path).data)
+        && get(path).data.expiresAt > request.time
+        && getAfter(path).data.get('usedBy', null) == request.auth.uid;
+    }
+
     // The figure and its caption are REQUIRED only while the submission is
     // still in the running for a talk (talkConsidered != false) — a poster
     // that has opted out needs neither. Organizers writing through
@@ -123,7 +138,7 @@ service cloud.firestore {
       return data.keys().hasOnly(['ownerUid', 'edition', 'title', 'affiliations', 'authors',
                                   'body', 'topic', 'talkConsidered', 'figureUrl', 'figurePath',
                                   'figureCaption', 'publishChoice', 'publishConfirmed',
-                                  'status', 'createdAt', 'updatedAt'])
+                                  'status', 'createdAt', 'updatedAt', 'submissionLink'])
         && data.keys().hasAll(['ownerUid', 'edition', 'title', 'affiliations', 'authors',
                                'body', 'topic', 'talkConsidered', 'status'])
         && data.ownerUid == uid
@@ -138,6 +153,7 @@ service cloud.firestore {
         // there is no figure, the same way it writes figurePath.
         && (!('figureUrl' in data) || data.figureUrl == null || str(data.figureUrl, 500))
         && optStr(data, 'figureCaption', 600)
+        && optStr(data, 'submissionLink', 64)
         && (!('publishChoice' in data) || data.publishChoice in ['full', 'titleOnly'])
         && (!('publishConfirmed' in data) || data.publishConfirmed is bool)
         && (!('figurePath' in data) || data.figurePath == null || str(data.figurePath, 300))
@@ -331,6 +347,31 @@ service cloud.firestore {
             .data.get('registrationLink', null) == token;
     }
 
+    // Late-submission links: the abstract counterpart of registration_links/,
+    // for somebody who missed the submission deadline. Same shape, same
+    // reasoning: the id is the token, anybody holding it may read it, and the
+    // only non-admin update is spending it in the batch that creates the
+    // spender's own abstract with this token recorded on it (see
+    // redeemsSubmissionLink() for the other half). Revoking is deleting.
+    match /submission_links/{token} {
+      allow get: if true;
+      allow list, delete: if isAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasOnly(['createdBy', 'createdAt', 'expiresAt'])
+        && request.resource.data.keys().hasAll(['createdBy', 'expiresAt'])
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.expiresAt is timestamp;
+      allow update: if isSignedIn()
+        && !('usedBy' in resource.data)
+        && resource.data.expiresAt > request.time
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['usedBy', 'usedAt'])
+        && request.resource.data.usedBy == request.auth.uid
+        && request.resource.data.usedAt == request.time
+        && getAfter(/databases/$(database)/documents/abstracts/$(request.auth.uid))
+            .data.get('submissionLink', null) == token;
+    }
+
     // Late-editing grants: an organizer reopening editing for one participant
     // after the editing window has closed. The document id IS the participant's
     // uid, so lateEditGranted() finds it with a plain get and nothing on the
@@ -371,7 +412,12 @@ service cloud.firestore {
       // Institutional mail filters do quarantine the verification message often
       // enough to matter (measured, see the README), so every page that can hit
       // this rule carries a resend button rather than leaving people stuck.
-      allow create: if isVerified() && submissionWindowOpen()
+      //
+      // After the window has closed, a late-submission link opens it for one
+      // create (redeemsSubmissionLink() above). The abstract records the token,
+      // pinned on update below so the record cannot be rewritten afterwards.
+      allow create: if isVerified()
+        && (submissionWindowOpen() || redeemsSubmissionLink(request.resource.data))
         && isOwner(uid)
         && validAbstract(request.resource.data, uid)
         && request.resource.data.status == 'submitted';
@@ -400,6 +446,8 @@ service cloud.firestore {
       allow update: if isVerified() && canEdit(uid)
         && isOwner(uid)
         && validAbstract(request.resource.data, uid)
+        && request.resource.data.get('submissionLink', null)
+            == resource.data.get('submissionLink', null)
         && ((resource.data.status in ['submitted', 'rejected', 'withdrawn']
              && (request.resource.data.status == resource.data.status
                  || (submissionWindowOpen() && request.resource.data.status == 'submitted')))

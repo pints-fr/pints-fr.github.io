@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
   editLinkUrl, grantStatus, isRegistrationOpen, linkStatus, newLinkToken, registrationLinkUrl,
+  submissionLinkUrl,
 } from "../js/registration-utils.mjs";
 
 test("registration is open when there is no config at all", () => {
@@ -65,4 +66,9 @@ test("a late-editing grant is active until it expires", () => {
 test("the late-editing link opens the editor next to the admin page", () => {
   assert.equal(editLinkUrl("https://pints.fr/admin.html#settings"),
     "https://pints.fr/submit.html?edit=1");
+});
+
+test("the submission link opens submit.html with the token", () => {
+  assert.equal(submissionLinkUrl("https://pints.fr/admin.html#settings", "abc"),
+    "https://pints.fr/submit.html?link=abc");
 });

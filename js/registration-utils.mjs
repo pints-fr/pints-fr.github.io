@@ -24,7 +24,7 @@ export const LINK_DURATIONS = [
   { label: "7 days", hours: 168 },
 ];
 
-/** "missing", "used", "expired" or "valid", for a registration_links document. */
+/** "missing", "used", "expired" or "valid", for a registration_links or submission_links document. */
 export function linkStatus(link, now = new Date()) {
   if (!link) return "missing";
   if (link.usedBy) return "used";
@@ -41,6 +41,19 @@ export function newLinkToken(bytes) {
 /** The address to send, resolved against the page generating it. */
 export function registrationLinkUrl(baseHref, token) {
   const url = new URL("register.html", baseHref);
+  url.searchParams.set("link", token);
+  return url.href;
+}
+
+// ---------------------------------------------------- late-submission links
+//
+// The same single-use links for abstracts (submission_links/{token}, honoured
+// by redeemsSubmissionLink() in firestore.rules): one new abstract, once,
+// after submissions have closed. linkStatus() and newLinkToken() serve both.
+
+/** The address to send, resolved against the page generating it. */
+export function submissionLinkUrl(baseHref, token) {
+  const url = new URL("submit.html", baseHref);
   url.searchParams.set("link", token);
   return url.href;
 }

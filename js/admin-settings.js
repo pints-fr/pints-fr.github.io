@@ -1,11 +1,12 @@
 import {
-  addAdmin, createEditGrant, createRegistrationLink, deleteEditGrant, deleteRegistrationLink,
-  getSiteConfig, listAbstracts, listEditGrants, listRegistrationLinks, listUsers, republishAll,
-  saveSiteConfig,
+  addAdmin, createEditGrant, createRegistrationLink, createSubmissionLink, deleteEditGrant,
+  deleteRegistrationLink, deleteSubmissionLink, getSiteConfig, listAbstracts, listEditGrants,
+  listRegistrationLinks, listSubmissionLinks, listUsers, republishAll, saveSiteConfig,
 } from "./db.js";
 import { submissionWindows } from "./abstract-utils.mjs";
 import {
   editLinkUrl, grantStatus, isRegistrationOpen, LINK_DURATIONS, linkStatus, registrationLinkUrl,
+  submissionLinkUrl,
 } from "./registration-utils.mjs";
 
 export async function mountSettingsTab(host, { adminUid }) {
@@ -37,24 +38,7 @@ export async function mountSettingsTab(host, { adminUid }) {
     <h3>Late registration link</h3>
     <p class="muted">For somebody who missed the deadline. Each link lets one person register,
       once, until it expires — whether or not registration is open. Send it to them yourself.</p>
-    <form id="link-form" novalidate>
-      <label for="link-hours">Valid for</label>
-      <select id="link-hours">
-        ${LINK_DURATIONS.map((d) => `<option value="${d.hours}">${d.label}</option>`).join("")}
-      </select>
-      <div class="actions"><button type="submit" id="link-make">Generate link</button></div>
-    </form>
-    <div id="link-out" hidden>
-      <label for="link-url">New link</label>
-      <input id="link-url" type="text" readonly>
-      <div class="actions"><button type="button" id="link-copy" class="secondary">Copy link</button></div>
-    </div>
-    <div class="table-scroll">
-      <table>
-        <thead><tr><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead>
-        <tbody id="link-rows"></tbody>
-      </table>
-    </div>
+    ${linkPanel("link")}
 
     <h2>Submission window</h2>
     <form id="cfg-form" novalidate>
@@ -72,6 +56,13 @@ export async function mountSettingsTab(host, { adminUid }) {
       <input id="cfg-deadline" type="datetime-local">
       <div class="actions"><button type="submit" id="cfg-save">Save settings</button></div>
     </form>
+
+    <h3>Late submission link</h3>
+    <p class="muted">For somebody who missed the deadline. Each link lets one participant submit
+      one new abstract, once, until it expires — whether or not submissions are open. It does
+      not reopen editing. They must be registered with a confirmed address: if registration is
+      closed too, send them a registration link as well.</p>
+    ${linkPanel("sublink")}
 
     <h2>Editing window</h2>
     <form id="edit-form" novalidate>
@@ -201,73 +192,13 @@ export async function mountSettingsTab(host, { adminUid }) {
     }
   });
 
-  const linkOut = host.querySelector("#link-out");
-  const linkUrl = host.querySelector("#link-url");
-  const linkRows = host.querySelector("#link-rows");
   const when = (value) => value?.toDate?.().toLocaleString(undefined,
     { dateStyle: "medium", timeStyle: "short" }) ?? "—";
 
-  /** Every link ever generated, newest first, with who spent each one. */
-  async function renderLinks() {
-    const [links, users] = await Promise.all([listRegistrationLinks(), listUsers()]);
-    const names = new Map(users.map((u) => [u.id, u.displayName || u.email]));
-    links.sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
-
-    linkRows.replaceChildren();
-    for (const link of links) {
-      const status = linkStatus(link);
-      const tr = document.createElement("tr");
-      const label = status === "used"
-        ? `Used by ${names.get(link.usedBy) ?? link.usedBy} on ${when(link.usedAt)}`
-        : status === "expired" ? "Expired" : "Not used yet";
-      for (const value of [when(link.createdAt), when(link.expiresAt), label]) {
-        const td = document.createElement("td");
-        td.textContent = value;
-        tr.append(td);
-      }
-      const td = document.createElement("td");
-      td.className = "tools";
-      if (status === "valid") {
-        const copy = document.createElement("button");
-        copy.className = "secondary";
-        copy.textContent = "Copy";
-        copy.addEventListener("click", () => copyLink(registrationLinkUrl(location.href, link.id)));
-        const revoke = document.createElement("button");
-        revoke.className = "secondary";
-        revoke.textContent = "Revoke";
-        revoke.addEventListener("click", async () => {
-          revoke.disabled = true;
-          try {
-            await deleteRegistrationLink(link.id);
-            if (linkUrl.value.endsWith(link.id)) linkOut.hidden = true;
-            say("Link revoked. It no longer works.", "ok");
-            await renderLinks();
-          } catch (err) {
-            say("Could not revoke that link.", "err");
-            console.error("[pints] deleteRegistrationLink", err);
-            revoke.disabled = false;
-          }
-        });
-        td.append(copy, " ", revoke);
-      }
-      tr.append(td);
-      linkRows.append(tr);
-    }
-    if (!links.length) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = 4;
-      td.className = "muted";
-      td.textContent = "No links generated yet.";
-      tr.append(td);
-      linkRows.append(tr);
-    }
-  }
-
   // The Clipboard API needs a secure context and a permission some browsers
   // withhold; when it is refused, the text is selected so Ctrl/Cmd-C works.
-  async function copyLink(url, { out = linkOut, input = linkUrl,
-    done = "Link copied. It works once, for one person." } = {}) {
+  async function copyLink(url, { out, input,
+    done = "Link copied. It works once, for one person." }) {
     input.value = url;
     out.hidden = false;
     try {
@@ -279,34 +210,118 @@ export async function mountSettingsTab(host, { adminUid }) {
     }
   }
 
-  renderLinks().catch((err) => {
-    say("Could not load the registration links.", "err");
-    console.error("[pints] listRegistrationLinks", err);
-  });
+  /**
+   * One panel of single-use links (see linkPanel() for its markup): generate,
+   * copy, list with who spent each one, revoke. Registration and submission
+   * links differ only in where they are stored and which page they open.
+   */
+  function mountLinkPanel(prefix, { kind, list, create, remove, urlFor }) {
+    const out = host.querySelector(`#${prefix}-out`);
+    const input = host.querySelector(`#${prefix}-url`);
+    const rows = host.querySelector(`#${prefix}-rows`);
+    const copy = (url) => copyLink(url, { out, input });
 
-  host.querySelector("#link-copy").addEventListener("click", () => copyLink(linkUrl.value));
+    /** Every link ever generated, newest first, with who spent each one. */
+    async function render() {
+      const [links, users] = await Promise.all([list(), listUsers()]);
+      const names = new Map(users.map((u) => [u.id, u.displayName || u.email]));
+      links.sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
 
-  host.querySelector("#link-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const linkMake = host.querySelector("#link-make");
-    linkMake.disabled = true;
-    try {
-      const hours = Number(host.querySelector("#link-hours").value);
-      const token = await createRegistrationLink(adminUid, hours);
-      // Shown and listed before the copy is attempted: a clipboard permission
-      // prompt can leave writeText() pending, and the link must not wait on it.
-      const url = registrationLinkUrl(location.href, token);
-      linkUrl.value = url;
-      linkOut.hidden = false;
-      say("Link generated. It works once, for one person.", "ok");
-      await renderLinks();
-      copyLink(url);
-    } catch (err) {
-      say("Could not generate a link.", "err");
-      console.error("[pints] createRegistrationLink", err);
-    } finally {
-      linkMake.disabled = false;
+      rows.replaceChildren();
+      for (const link of links) {
+        const status = linkStatus(link);
+        const tr = document.createElement("tr");
+        const label = status === "used"
+          ? `Used by ${names.get(link.usedBy) ?? link.usedBy} on ${when(link.usedAt)}`
+          : status === "expired" ? "Expired" : "Not used yet";
+        for (const value of [when(link.createdAt), when(link.expiresAt), label]) {
+          const td = document.createElement("td");
+          td.textContent = value;
+          tr.append(td);
+        }
+        const td = document.createElement("td");
+        td.className = "tools";
+        if (status === "valid") {
+          const copyBtn = document.createElement("button");
+          copyBtn.className = "secondary";
+          copyBtn.textContent = "Copy";
+          copyBtn.addEventListener("click", () => copy(urlFor(link.id)));
+          const revoke = document.createElement("button");
+          revoke.className = "secondary";
+          revoke.textContent = "Revoke";
+          revoke.addEventListener("click", async () => {
+            revoke.disabled = true;
+            try {
+              await remove(link.id);
+              if (input.value.endsWith(link.id)) out.hidden = true;
+              say("Link revoked. It no longer works.", "ok");
+              await render();
+            } catch (err) {
+              say("Could not revoke that link.", "err");
+              console.error(`[pints] delete ${kind} link`, err);
+              revoke.disabled = false;
+            }
+          });
+          td.append(copyBtn, " ", revoke);
+        }
+        tr.append(td);
+        rows.append(tr);
+      }
+      if (!links.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 4;
+        td.className = "muted";
+        td.textContent = "No links generated yet.";
+        tr.append(td);
+        rows.append(tr);
+      }
     }
+
+    render().catch((err) => {
+      say(`Could not load the ${kind} links.`, "err");
+      console.error(`[pints] list ${kind} links`, err);
+    });
+
+    host.querySelector(`#${prefix}-copy`).addEventListener("click", () => copy(input.value));
+
+    host.querySelector(`#${prefix}-form`).addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const make = host.querySelector(`#${prefix}-make`);
+      make.disabled = true;
+      try {
+        const hours = Number(host.querySelector(`#${prefix}-hours`).value);
+        const token = await create(adminUid, hours);
+        // Shown and listed before the copy is attempted: a clipboard permission
+        // prompt can leave writeText() pending, and the link must not wait on it.
+        const url = urlFor(token);
+        input.value = url;
+        out.hidden = false;
+        say("Link generated. It works once, for one person.", "ok");
+        await render();
+        copy(url);
+      } catch (err) {
+        say("Could not generate a link.", "err");
+        console.error(`[pints] create ${kind} link`, err);
+      } finally {
+        make.disabled = false;
+      }
+    });
+  }
+
+  mountLinkPanel("link", {
+    kind: "registration",
+    list: listRegistrationLinks,
+    create: createRegistrationLink,
+    remove: deleteRegistrationLink,
+    urlFor: (token) => registrationLinkUrl(location.href, token),
+  });
+  mountLinkPanel("sublink", {
+    kind: "submission",
+    list: listSubmissionLinks,
+    create: createSubmissionLink,
+    remove: deleteSubmissionLink,
+    urlFor: (token) => submissionLinkUrl(location.href, token),
   });
 
   const grantOut = host.querySelector("#grant-out");
@@ -513,4 +528,29 @@ function toLocalInput(date) {
   if (!date) return "";
   const offset = date.getTimezoneOffset() * 60000;
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+/** The markup of one single-use link panel; mountLinkPanel() wires it up. */
+function linkPanel(prefix) {
+  return `
+    <form id="${prefix}-form" novalidate>
+      <label for="${prefix}-hours">Valid for</label>
+      <select id="${prefix}-hours">
+        ${LINK_DURATIONS.map((d) => `<option value="${d.hours}">${d.label}</option>`).join("")}
+      </select>
+      <div class="actions"><button type="submit" id="${prefix}-make">Generate link</button></div>
+    </form>
+    <div id="${prefix}-out" hidden>
+      <label for="${prefix}-url">New link</label>
+      <input id="${prefix}-url" type="text" readonly>
+      <div class="actions">
+        <button type="button" id="${prefix}-copy" class="secondary">Copy link</button>
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Created</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+        <tbody id="${prefix}-rows"></tbody>
+      </table>
+    </div>`;
 }

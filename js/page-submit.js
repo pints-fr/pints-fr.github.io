@@ -3,10 +3,12 @@ import { warnIfUnconfigured } from "./firebase.js";
 import { checkIsAdmin, refreshVerification, requireUser, sendVerification } from "./auth.js";
 import {
   getMyAbstract, getMyEditGrant, getProfile, getPublicAbstract, getSiteConfig,
+  getSubmissionLink,
 } from "./db.js";
 import { ownerCan, submissionWindows } from "./abstract-utils.mjs";
 import { mountAbstractForm } from "./abstract-form.js";
 import { mountSubmissionCard } from "./submission-view.js";
+import { linkStatus } from "./registration-utils.mjs";
 
 /**
  * Submitting an abstract: register first, then submit.
@@ -39,7 +41,12 @@ const say = (text, kind = "ok") => {
 // Everything mount() learned, so the card and the editor can be swapped without
 // re-reading the profile each time. `windows` is submissionWindows() of the
 // site config and any late-editing grant, which decides what the card offers.
-const state = { user: null, isAdmin: false, profile: null, windows: null };
+// `submissionLink` is set once a late-submission link (?link=, from Admin >
+// Settings) has been checked and is needed: submissions are closed and the
+// link still works.
+const state = {
+  user: null, isAdmin: false, profile: null, windows: null, submissionLink: null,
+};
 
 if (!warnIfUnconfigured(msg)) {
   const user = await requireUser();
@@ -88,6 +95,31 @@ async function mount(user, isAdmin) {
     return showSubmitted(mine);
   }
 
+  // A late-submission link only matters when it is the one thing letting this
+  // person in. While submissions are open it is ignored and stays unspent, and
+  // an organizer needs none: the rules let them write anyway.
+  const linkToken = new URLSearchParams(location.search).get("link");
+  if (linkToken && !state.windows.submitOpen && !isAdmin) {
+    const link = await getSubmissionLink(linkToken).catch((err) => {
+      console.error("[pints] getSubmissionLink", err);
+      return null;
+    });
+    const status = linkStatus(link);
+    if (status === "valid") {
+      state.submissionLink = linkToken;
+      const until = link.expiresAt.toDate().toLocaleString(undefined,
+        { dateStyle: "long", timeStyle: "short" });
+      say(`Submissions are closed, but this personal link from the organizers lets you `
+        + `submit one abstract until ${until}. It works once.`, "warn");
+    } else {
+      say({
+        used: "This submission link has already been used.",
+        expired: "This submission link has expired.",
+        missing: "This submission link is not valid.",
+      }[status] + " Need help? Please contact the organizers.", "err");
+    }
+  }
+
   if (user.emailVerified) await showForm(null);
 }
 
@@ -127,6 +159,7 @@ async function showForm(abstract, published = null) {
       : null,
     defaultAuthorName: state.profile?.displayName ?? "",
     defaultAffiliation: state.profile?.affiliation ?? "",
+    submissionLink: abstract ? null : state.submissionLink,
     // Only when editing: on a first submission there is nothing to go back to.
     onCancel: abstract ? () => showSubmitted(abstract) : null,
     onSaved: async () => {

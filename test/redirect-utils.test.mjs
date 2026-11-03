@@ -46,3 +46,20 @@ test("withNext only appends a target it would follow", () => {
   assert.equal(withNext("register.html", null), "register.html");
   assert.equal(withNext("register.html", "https://evil.example"), "register.html");
 });
+
+const HEX = "0123456789abcdef0123456789abcdef";
+
+test("safeNext keeps a late-submission link token and nothing else in the query", () => {
+  assert.equal(safeNext(`submit.html?link=${HEX}`), `submit.html?link=${HEX}`);
+  assert.equal(safeNext(`submit.html?link=${HEX}#form`), `submit.html?link=${HEX}#form`);
+  for (const bad of [
+    `submit.html?link=${HEX}0`, "submit.html?link=xyz", `submit.html?next=${HEX}`,
+    `submit.html?link=${HEX}&x=1`, `//evil.example/?link=${HEX}`,
+  ]) assert.equal(safeNext(bad), null, `should reject ${bad}`);
+});
+
+test("nextValue carries a valid link through sign-in and drops other queries", () => {
+  assert.equal(nextValue("submit.html", "", `?link=${HEX}&emulator`), `submit.html?link=${HEX}`);
+  assert.equal(nextValue("submit.html", "", "?link=nope"), "submit.html");
+  assert.equal(nextValue("submit.html", "", "?edit=1"), "submit.html");
+});

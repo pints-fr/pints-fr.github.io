@@ -122,7 +122,7 @@ export function requireUser() {
       if (user) resolve(user);
       else {
         location.replace(withNext("login.html",
-          nextValue(currentPageFile(location.pathname), location.hash)));
+          nextValue(currentPageFile(location.pathname), location.hash, location.search)));
       }
     });
   });

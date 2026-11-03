@@ -241,6 +241,7 @@ export async function mountAbstractForm(
     defaultAuthorName = "",
     defaultAffiliation = "",
     republish = null,
+    submissionLink = null,
     onCancel = null,
     onDelete = null,
     onSaved = () => {},
@@ -319,12 +320,20 @@ export async function mountAbstractForm(
   const { deadline, editingDeadline, lateEditUntil } = windows;
   const when = (date) => date.toLocaleString("en-GB");
 
+  // A late-submission link (page-submit.js has already checked it) opens the
+  // submission window for this one NEW abstract. It is spent by the first save,
+  // and the abstract carries it from then on (`linkToSpend` goes null).
+  let linkToSpend = abstract ? null : submissionLink;
+  const recordedLink = abstract?.submissionLink ?? submissionLink;
+
   $("#window-note").textContent = windows.submitOpen
     ? `Submissions are open${deadline ? ` until ${when(deadline)}` : ""}.`
-    : windows.editOpen && abstract && (lateEditUntil ?? editingDeadline)
-      ? `Submissions are closed. You can edit or retract your abstract until ${
-        when(lateEditUntil ?? editingDeadline)}.`
-      : "Submissions are closed.";
+    : linkToSpend
+      ? "Submissions are closed, but your personal link lets you submit once."
+      : windows.editOpen && abstract && (lateEditUntil ?? editingDeadline)
+        ? `Submissions are closed. You can edit or retract your abstract until ${
+          when(lateEditUntil ?? editingDeadline)}.`
+        : "Submissions are closed.";
   $("#abs-pub-hint").textContent = editingDeadline && !windows.editClosed
     ? `If you have not confirmed by ${when(editingDeadline)}, the first option applies.`
     : "If you do not confirm, the first option applies.";
@@ -426,7 +435,7 @@ export async function mountAbstractForm(
   // firestore.rules already grants them `allow write: if isAdmin()`. Gating them
   // in the UI alone would be theatre.
   const verified = isAdmin || Boolean(user?.emailVerified);
-  const windowOpen = abstract ? windows.editOpen : windows.submitOpen;
+  const windowOpen = abstract ? windows.editOpen : windows.submitOpen || Boolean(linkToSpend);
   const editable = (isAdmin || windowOpen) && !frozen && verified;
   // A save by the owner outside the submission window is a correction, not a
   // resubmission: the rules pin the status, so a rejected abstract stays
@@ -598,7 +607,7 @@ export async function mountAbstractForm(
     // organizers to neither — firestore.rules lets them write at any time.
     // validateAbstract's defaults are "open, no deadline".
     const { errors } = validateAbstract(draft,
-      isAdmin || abstract ? {} : { submissionsOpen, deadline });
+      isAdmin || abstract || linkToSpend ? {} : { submissionsOpen, deadline });
     if (errors.length) {
       sayErrors(errors);
       return false;
@@ -635,8 +644,11 @@ export async function mountAbstractForm(
             : "submitted",
           createdAt: abstract?.createdAt ?? null,
           republish: accepted ? { ...republish, editClosed: windows.editClosed } : null,
+          submissionLink: recordedLink,
+          spendLink: Boolean(linkToSpend),
         },
       );
+      linkToSpend = null;
       say(editingSomeoneElse
         ? "Abstract saved." + (abstract?.status === "accepted"
           ? " The public list has been updated too." : "")

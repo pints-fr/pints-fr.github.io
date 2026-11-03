@@ -148,6 +148,13 @@ export async function getMyAbstract(uid) {
  * the editing window is open — so both copies are rewritten in one batch.
  * Without it abstracts_public would keep serving the old text. Its `editClosed`
  * decides what an unconfirmed publish setting becomes (see publicMode()).
+ *
+ * `submissionLink` is the late-submission link an abstract was created with,
+ * carried through every later save: the record is written whole, and
+ * firestore.rules pins the field on update. `spendLink` marks the save that
+ * creates the abstract after submissions have closed: the same batch stamps
+ * the link as used, and the rules accept the abstract only if both happen
+ * together (redeemsSubmissionLink()).
  */
 export async function saveAbstract(
   id,
@@ -156,7 +163,10 @@ export async function saveAbstract(
     title, affiliations, authors, body, topic, talkConsidered,
     figureUrl, figurePath, figureCaption, publishChoice, publishConfirmed,
   },
-  { status = "submitted", createdAt = null, republish = null } = {},
+  {
+    status = "submitted", createdAt = null, republish = null,
+    submissionLink = null, spendLink = false,
+  } = {},
 ) {
   const record = {
     ownerUid,
@@ -177,23 +187,30 @@ export async function saveAbstract(
     // not make it a submission from November.
     createdAt: createdAt ?? serverTimestamp(),
     updatedAt: serverTimestamp(),
+    ...(submissionLink ? { submissionLink } : {}),
   };
 
-  if (!republish) {
+  if (!republish && !spendLink) {
     await setDoc(doc(db, "abstracts", id), record);
     return;
   }
 
   const batch = writeBatch(db);
   batch.set(doc(db, "abstracts", id), record);
-  batch.set(doc(db, "abstracts_public", id),
-    publicAbstract(record, {
-      type: republish.type,
-      posterSession: republish.posterSession,
-      posterNumber: republish.posterNumber,
-      acceptedAt: republish.acceptedAt,
-      editClosed: republish.editClosed,
-    }));
+  if (spendLink) {
+    batch.update(doc(db, "submission_links", submissionLink),
+      { usedBy: ownerUid, usedAt: serverTimestamp() });
+  }
+  if (republish) {
+    batch.set(doc(db, "abstracts_public", id),
+      publicAbstract(record, {
+        type: republish.type,
+        posterSession: republish.posterSession,
+        posterNumber: republish.posterNumber,
+        acceptedAt: republish.acceptedAt,
+        editClosed: republish.editClosed,
+      }));
+  }
   await batch.commit();
 }
 
@@ -630,6 +647,33 @@ export async function listRegistrationLinks() {
 /** Revoke a link. Deleting it is all revoking takes. */
 export const deleteRegistrationLink = (token) =>
   deleteDoc(doc(db, "registration_links", token));
+
+// ---------------------------------------------------- late-submission links
+//
+// submission_links/{token}: the same single-use links, for submitting an
+// abstract after submissions have closed. Spent by saveAbstract({ spendLink }).
+
+export async function createSubmissionLink(adminUid, hours) {
+  const token = newLinkToken(crypto.getRandomValues(new Uint8Array(16)));
+  await setDoc(doc(db, "submission_links", token), {
+    createdBy: adminUid,
+    createdAt: serverTimestamp(),
+    expiresAt: new Date(Date.now() + hours * 3600_000),
+  });
+  return token;
+}
+
+export async function getSubmissionLink(token) {
+  const snap = await getDoc(doc(db, "submission_links", token));
+  return snap.exists() ? snapData(snap) : null;
+}
+
+export async function listSubmissionLinks() {
+  return (await getDocs(collection(db, "submission_links"))).docs.map(snapData);
+}
+
+export const deleteSubmissionLink = (token) =>
+  deleteDoc(doc(db, "submission_links", token));
 
 // ----------------------------------------------------- late-editing grants
 //
