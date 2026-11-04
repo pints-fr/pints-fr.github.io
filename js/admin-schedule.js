@@ -183,7 +183,8 @@ export async function mountScheduleTab(host) {
   textInput.id = "s-abstract-text";
   textInput.maxLength = 5000;
   textInput.rows = 6;
-  textInput.placeholder = "For invited speakers. Shown under the title in the program.";
+  textInput.placeholder = "For invited speakers. Listed on the abstracts page under "
+    + "Keynotes or Invited talks, and linked from the title in the program.";
   const textField = document.createElement("div");
   textField.append(textLabel, textInput);
   form.append(textField);

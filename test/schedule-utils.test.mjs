@@ -2,8 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   formatDayHeading,
+  filterInvitedTalks,
   formatTimeRange,
   groupScheduleBySession,
+  invitedTalkGroups,
+  invitedTalkLink,
   parseTime,
   programAbstractLinks,
   programPosterSessions,
@@ -181,4 +184,40 @@ test("programPosterSessions honours an explicit session", () => {
   ]);
   assert.deepEqual([...sessions], [["a", 2], ["b", 1]]);
   assert.deepEqual([...programPosterSessions(null)], []);
+});
+
+test("invitedTalkGroups splits keynotes from invited talks, in time order", () => {
+  const groups = invitedTalkGroups([
+    { id: "t2", kind: "talk", start: "14:00", title: "Late talk", abstract: "b" },
+    { id: "k1", kind: "keynote", start: "09:30", title: "Keynote", abstract: "a" },
+    { id: "t1", kind: "talk", start: "11:00", title: "Early talk", abstract: "c" },
+    { id: "t3", kind: "talk", start: "12:00", title: "No abstract" },
+    { id: "t4", kind: "talk", start: "12:30", title: "Blank abstract", abstract: "  " },
+    { id: "b1", kind: "break", start: "10:30", title: "Coffee", abstract: "stray" },
+  ]);
+  assert.deepEqual(groups.map((g) => [g.label, g.items.map((i) => i.id)]), [
+    ["Keynotes", ["k1"]],
+    ["Invited talks", ["t1", "t2"]],
+  ]);
+});
+
+test("invitedTalkGroups drops empty sections", () => {
+  assert.deepEqual(invitedTalkGroups([]), []);
+  assert.deepEqual(invitedTalkGroups([{ id: "t", kind: "talk", abstract: "x" }])
+    .map((g) => g.key), ["invited"]);
+});
+
+test("filterInvitedTalks matches title, speaker, affiliation and abstract", () => {
+  const list = [
+    { id: "a", title: "Grid cells", speaker: "Ada", affiliation: "ENS", abstract: "space" },
+    { id: "b", title: "Songbirds", speaker: "Bo", affiliation: "ICM", abstract: "learning" },
+  ];
+  for (const [term, ids] of [["grid", ["a"]], ["BO", ["b"]], ["icm", ["b"]], ["learn", ["b"]],
+    ["", ["a", "b"]], ["zzz", []]]) {
+    assert.deepEqual(filterInvitedTalks(list, term).map((i) => i.id), ids, term);
+  }
+});
+
+test("invitedTalkLink points at the row on the abstracts page", () => {
+  assert.equal(invitedTalkLink("k1"), "abstracts.html#talk-k1");
 });

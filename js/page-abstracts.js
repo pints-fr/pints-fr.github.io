@@ -2,13 +2,20 @@ import { mountLayout, setAuthLink } from "./layout.js";
 import { warnIfUnconfigured } from "./firebase.js";
 import { onUser } from "./auth.js";
 import {
-  getMyAbstract, getMyEditGrant, getPublicAbstract, getSiteConfig, listPublicAbstracts, retractAbstract,
+  getMyAbstract, getMyEditGrant, getPublicAbstract, getSiteConfig, listPublicAbstracts, listSchedule,
+  retractAbstract,
 } from "./db.js";
 import {
   abstractAnchor, filterAbstracts, groupBySession, posterSessionAnchor, retractQuestion,
   sortPublicAbstracts, submissionWindows,
 } from "./abstract-utils.mjs";
-import { abstractCard, abstractDisclosure, abstractPermalink } from "./abstract-card.js";
+import {
+  abstractCard, abstractDisclosure, abstractPermalink, disclosureShell,
+} from "./abstract-card.js";
+import { renderAbstractHtml } from "./markdown.js";
+import {
+  filterInvitedTalks, formatTimeRange, invitedTalkAnchor, invitedTalkGroups,
+} from "./schedule-utils.mjs";
 import { mountSubmissionCard } from "./submission-view.js";
 import { deleteFigure } from "./storage.js";
 import { ABSTRACT_TOPICS, SITE_NAME, TOPIC_LABELS } from "./config.mjs";
@@ -230,6 +237,68 @@ async function mountOne(id) {
   }
 }
 
+/**
+ * One invited talk as a row of the list. Its abstract was typed into the
+ * program by the organizers, so the row is built from the schedule item: the
+ * speaker in place of an author list, and no vote, since only posters compete.
+ */
+function invitedTalkRow(item) {
+  const title = document.createElement("span");
+  title.className = "summary-title";
+  title.textContent = item.title ?? "";
+  const summary = [title];
+  const who = [item.speaker, item.affiliation].filter(Boolean).join(" — ");
+  if (who) {
+    const line = document.createElement("span");
+    line.className = "summary-authors";
+    line.textContent = who;
+    summary.push(line);
+  }
+  const row = disclosureShell({
+    summary,
+    buildBody: () => {
+      const body = document.createElement("div");
+      body.className = "abstract-body";
+      if (item.speaker) {
+        const byline = document.createElement("p");
+        byline.className = "byline";
+        const name = document.createElement("strong");
+        name.textContent = item.speaker;
+        byline.append(name);
+        if (item.affiliation) byline.append(`, ${item.affiliation}`);
+        body.append(byline);
+      }
+      const text = document.createElement("div");
+      // Organizer-entered, but through the same allowlist as a submission.
+      text.innerHTML = renderAbstractHtml(item.abstract);
+      body.append(text);
+      const when = formatTimeRange(item.start, item.end);
+      const meta = document.createElement("p");
+      meta.className = "muted";
+      const program = document.createElement("a");
+      program.href = "program.html";
+      program.textContent = "program";
+      meta.append(when ? `${when} — see the ` : "See the ", program);
+      body.append(meta);
+      return body;
+    },
+  });
+  row.id = invitedTalkAnchor(item.id);
+  return row;
+}
+
+function sectionHeading(label, count, id = null) {
+  const h2 = document.createElement("h2");
+  h2.className = "topic-heading";
+  if (id) h2.id = id;
+  h2.textContent = label;
+  const n = document.createElement("span");
+  n.className = "muted";
+  n.textContent = ` ${count}`;
+  h2.append(n);
+  return h2;
+}
+
 function backLink() {
   const p = document.createElement("p");
   const a = document.createElement("a");
@@ -277,26 +346,34 @@ async function mountList() {
   if (warnIfUnconfigured(msg)) return;
 
   let all = [];
+  // Program items carrying an invited speaker's abstract.
+  let invited = [];
   const draw = () => {
     const byTopic = topicEl.value ? all.filter((a) => a.topic === topicEl.value) : all;
     const shown = filterAbstracts(byTopic, queryEl.value);
-    countEl.textContent = `${shown.length} of ${all.length} shown.`;
+    // A session id is a topic id (plus "keynote"), so the topic filter keeps an
+    // invited talk scheduled in that topic's session, and hides the keynotes.
+    const invitedByTopic = topicEl.value
+      ? invited.filter((item) => item.session === topicEl.value) : invited;
+    const invitedShown = filterInvitedTalks(invitedByTopic, queryEl.value);
+    countEl.textContent =
+      `${shown.length + invitedShown.length} of ${all.length + invited.length} shown.`;
+
+    // Keynotes and invited talks lead, as they open the day's sessions.
+    const nodes = [];
+    for (const group of invitedTalkGroups(invitedShown)) {
+      nodes.push(sectionHeading(group.label, group.items.length, `section-${group.key}`),
+        ...group.items.map(invitedTalkRow));
+    }
 
     // Talks, then one section per poster session, which is how the day is
     // walked. groupBySession keeps input order inside each, so board order
     // survives, and a poster not yet given a session lands in a trailing
     // section rather than vanishing.
-    const nodes = [];
     for (const group of groupBySession(shown)) {
-      const h2 = document.createElement("h2");
-      h2.className = "topic-heading";
       // The program's poster slots link here, to the session's heading.
-      if (typeof group.key === "number") h2.id = posterSessionAnchor(group.key);
-      h2.textContent = group.label;
-      const count = document.createElement("span");
-      count.className = "muted";
-      count.textContent = ` ${group.items.length}`;
-      h2.append(count);
+      const h2 = sectionHeading(group.label, group.items.length,
+        typeof group.key === "number" ? posterSessionAnchor(group.key) : null);
       nodes.push(h2, ...group.items.map((a) => {
         const row = abstractDisclosure(a, {
           permalink: abstractPermalink(a.id),
@@ -310,7 +387,7 @@ async function mountList() {
     // A redraw destroys every open row, so the control must not still say
     // "Collapse all".
     expandAll(false);
-    toggleAll.hidden = !shown.length;
+    toggleAll.hidden = !(shown.length + invitedShown.length);
   };
 
   // #abstract-<id>, which is how the program links a talk: open that row and
@@ -335,10 +412,20 @@ async function mountList() {
   };
 
   try {
-    all = sortPublicAbstracts(await listPublicAbstracts());
+    // The schedule only adds the invited talks, so a failure there costs those
+    // rows, not the list.
+    const [published, schedule] = await Promise.all([
+      listPublicAbstracts(),
+      listSchedule().catch((err) => {
+        console.error("[pints] abstracts schedule", err);
+        return [];
+      }),
+    ]);
+    all = sortPublicAbstracts(published);
+    invited = invitedTalkGroups(schedule).flatMap((g) => g.items);
     listed = all;
     renderVoteBanner();
-    if (!all.length) {
+    if (!all.length && !invited.length) {
       msg.className = "msg warn";
       msg.textContent = "No abstracts have been accepted yet.";
     }

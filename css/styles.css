@@ -638,12 +638,6 @@ tr.dragging { opacity: .4; }
    and bolding them would flatten the distinction the italics are making. */
 .program td.what { font-weight: 600; }
 .program tr.kind-break td.what, .program tr.kind-lunch td.what { font-weight: 400; }
-/* An invited talk's abstract, folded under its title. The body is prose, so it
-   drops the title's weight. */
-.program details.talk-abstract { margin-top: .3rem; font-weight: 400; }
-.program details.talk-abstract > summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
-.program details.talk-abstract .abstract-text { margin-top: .4rem; max-width: 65ch; }
-.program details.talk-abstract .abstract-text > :last-child { margin-bottom: 0; }
 
 /* Program sessions. Each <tbody class="session session-*"> is one block: a
    banner row naming it, then its items, all sharing a tint so the eye can find

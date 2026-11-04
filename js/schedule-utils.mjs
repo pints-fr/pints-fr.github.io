@@ -156,3 +156,34 @@ export function programPosterSessions(items) {
   }
   return sessions;
 }
+
+/**
+ * The program items whose abstract the organizers typed in — invited speakers,
+ * who submit nothing — as the abstracts page's two leading sections: keynotes,
+ * then invited talks, each in time order. Empty sections are dropped.
+ */
+export function invitedTalkGroups(items) {
+  const groups = [
+    { key: "keynotes", label: "Keynotes", items: [] },
+    { key: "invited", label: "Invited talks", items: [] },
+  ];
+  for (const item of sortScheduleItems(items ?? [])) {
+    if (!String(item?.abstract ?? "").trim()) continue;
+    if (item.kind === "keynote") groups[0].items.push(item);
+    else if (item.kind === "talk") groups[1].items.push(item);
+  }
+  return groups.filter((g) => g.items.length);
+}
+
+/** Search over an invited talk's title, speaker, affiliation and abstract. */
+export function filterInvitedTalks(list, term) {
+  const needle = String(term ?? "").trim().toLowerCase();
+  if (!needle) return [...list];
+  return list.filter((item) => [item?.title, item?.speaker, item?.affiliation, item?.abstract]
+    .some((text) => String(text ?? "").toLowerCase().includes(needle)));
+}
+
+/** The id an invited talk's row carries on the abstracts page, and its link. */
+export const invitedTalkAnchor = (itemId) => `talk-${itemId}`;
+export const invitedTalkLink = (itemId) =>
+  `abstracts.html#${encodeURIComponent(invitedTalkAnchor(itemId))}`;

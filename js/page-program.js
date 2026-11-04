@@ -4,12 +4,12 @@ import { onUser } from "./auth.js";
 import { getSiteConfig, listPublicAbstracts, listSchedule } from "./db.js";
 import { abstractListLink, posterSessionLink } from "./abstract-utils.mjs";
 import { POSTER_SESSION_LABELS } from "./config.mjs";
-import { renderAbstractHtml } from "./markdown.js";
 import {
   formatDayHeading,
   formatTimeRange,
   groupScheduleBySession,
   programAbstractLinks,
+  invitedTalkLink,
   programPosterSessions,
 } from "./schedule-utils.mjs";
 
@@ -31,11 +31,15 @@ function itemRow(item, { links, posterSessions }) {
   what.className = "what";
   // textContent: organizer-entered, but still never trusted into innerHTML.
   // A talk carries a link to its abstract on its title, which opens it in
-  // place on the abstracts page.
+  // place on the abstracts page: a submitted abstract when one is linked, else
+  // an invited speaker's, typed into the program and listed there under
+  // Keynotes or Invited talks.
   const abstractId = links.get(item.id);
-  if (abstractId) {
+  const invited = !abstractId && String(item.abstract ?? "").trim()
+    && (item.kind === "keynote" || item.kind === "talk");
+  if (abstractId || invited) {
     const link = document.createElement("a");
-    link.href = abstractListLink(abstractId);
+    link.href = abstractId ? abstractListLink(abstractId) : invitedTalkLink(item.id);
     link.textContent = item.title ?? "";
     what.append(link);
   } else {
@@ -63,21 +67,6 @@ function itemRow(item, { links, posterSessions }) {
     link.href = "party.html";
     link.textContent = "details";
     what.append(" — ", link);
-  }
-
-  // An invited talk's abstract, folded so the program still scans as a grid.
-  // Organizer-entered Markdown, sanitized with the same allowlist as a
-  // submitted abstract.
-  if (item.abstract && (item.kind === "keynote" || item.kind === "talk")) {
-    const details = document.createElement("details");
-    details.className = "talk-abstract";
-    const summary = document.createElement("summary");
-    summary.textContent = "Abstract";
-    const body = document.createElement("div");
-    body.className = "abstract-text";
-    body.innerHTML = renderAbstractHtml(item.abstract);
-    details.append(summary, body);
-    what.append(details);
   }
 
   const who = document.createElement("td");
