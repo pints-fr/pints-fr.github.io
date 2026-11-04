@@ -65,6 +65,45 @@ test("nobody can vote for their own poster", async () => {
   await assertFails(vote(asUser(env, "bob"), "bob", "bob"));
 });
 
+// Bob's poster lists alice (as registered: "alice") among its authors.
+async function seedCoAuthored(authorName) {
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts_public", "bob"), {
+    edition: "pints2026", title: "Bob's poster", type: "poster", posterNumber: 1,
+    authors: [{ name: "Bob" }, { name: authorName, presenting: false }],
+  }));
+}
+
+test("a co-author cannot vote for a poster they are named on", async () => {
+  await seedWorld();
+  await seedCoAuthored("alice");
+  await assertFails(vote(asUser(env, "alice"), "alice", "bob"));
+});
+
+test("co-author matching ignores case, hyphens and extra spaces", async () => {
+  await seedWorld();
+  await seed(env, (fs) => setDoc(doc(fs, "users", "alice"), {
+    email: "alice@example.org", displayName: "Marie-Claire Dupont", edition: "pints2026",
+  }));
+  await seedCoAuthored("  marie claire   DUPONT ");
+  await assertFails(vote(asUser(env, "alice"), "alice", "bob"));
+});
+
+test("a poster whose authors do not include the voter still takes their vote", async () => {
+  await seedWorld();
+  await seedCoAuthored("alicia");
+  await assertSucceeds(vote(asUser(env, "alice"), "alice", "bob"));
+});
+
+test("the 20th author is checked too", async () => {
+  await seedWorld();
+  await seed(env, (fs) => setDoc(doc(fs, "abstracts_public", "bob"), {
+    edition: "pints2026", title: "Bob's poster", type: "poster", posterNumber: 1,
+    authors: [...Array.from({ length: 19 }, (_, i) => ({ name: `Author ${i}` })),
+      { name: "alice" }],
+  }));
+  await assertFails(vote(asUser(env, "alice"), "alice", "bob"));
+});
+
 test("a talk is not a candidate", async () => {
   await seedWorld();
   await assertFails(vote(asUser(env, "alice"), "alice", "carol"));

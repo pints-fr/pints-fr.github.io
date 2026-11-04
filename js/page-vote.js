@@ -58,7 +58,7 @@ async function mount(user) {
       : board[2] ? posters.filter((p) =>
         String(p.posterSession) === board[1] && String(p.posterNumber) === board[2])
         : posters.filter((p) => String(p.posterNumber) === board[1]);
-    choicesEl.replaceChildren(...shown.map((p) => choiceRow(p, user.uid, ballot, selected)));
+    choicesEl.replaceChildren(...shown.map((p) => choiceRow(p, ballot, selected)));
     if (!shown.length) {
       const none = document.createElement("p");
       none.className = "muted";
@@ -110,8 +110,10 @@ async function mount(user) {
   draw();
 }
 
-function choiceRow(poster, uid, ballot, selected) {
-  const own = !canVoteFor(poster, uid);
+function choiceRow(poster, ballot, selected) {
+  // Disabled rather than hidden, so a co-author sees why their poster is not
+  // on offer instead of wondering where it went.
+  const own = !canVoteFor(poster, ballot.voter);
   const label = document.createElement("label");
   label.className = "vote-choice";
   if (poster.id === ballot.vote?.posterId) label.classList.add("is-current");

@@ -564,6 +564,7 @@ figcaption { margin-top: .35rem; max-width: var(--measure); color: var(--muted);
 .vote-bar-track { display: block; width: 8rem; background: var(--bg-soft); border-radius: 999px; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .vote-voters { margin: .25rem 0 0; padding-left: 1.1rem; color: var(--muted); font-size: .9rem; }
+.vote-own-flag { color: var(--warn); font-size: .85rem; margin-top: .2rem; }
 
 /* Printing the abstract list should yield an abstract book. The rows are opened
    from a beforeprint handler rather than by a rule here — their bodies are built

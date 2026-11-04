@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  ballotRows, canVoteFor, eligiblePosters, posterLabel, tallyVotes, votingOpen, votingStats,
+  ballotRows, canVoteFor, eligiblePosters, isPosterAuthor, nameKey, posterLabel, tallyVotes,
+  votingOpen, votingStats,
 } from "../js/vote-utils.mjs";
 
 const poster = (id, posterNumber, over = {}) =>
@@ -15,17 +16,44 @@ test("votingOpen fails closed", () => {
   assert.equal(votingOpen({ votingOpen: true }), true);
 });
 
+const me = { uid: "me", name: "Zoé Martin" };
+
 test("eligiblePosters drops talks and the voter's own poster, in board order", () => {
   const list = [poster("c", 3), talk("t"), poster("a", 1), poster("me", 2)];
-  assert.deepEqual(eligiblePosters(list, "me").map((p) => p.id), ["a", "c"]);
-  assert.deepEqual(eligiblePosters(undefined, "me"), []);
+  assert.deepEqual(eligiblePosters(list, me).map((p) => p.id), ["a", "c"]);
+  assert.deepEqual(eligiblePosters(undefined, me), []);
+});
+
+test("eligiblePosters drops posters the voter co-authored", () => {
+  const coAuthored = poster("b", 2, { authors: [{ name: "Bea" }, { name: "Zoe  MARTIN" }] });
+  const list = [poster("a", 1), coAuthored];
+  assert.deepEqual(eligiblePosters(list, me).map((p) => p.id), ["a"]);
 });
 
 test("canVoteFor mirrors eligiblePosters for one abstract", () => {
-  assert.equal(canVoteFor(poster("a", 1), "me"), true);
-  assert.equal(canVoteFor(poster("me", 1), "me"), false);
-  assert.equal(canVoteFor(talk("t"), "me"), false);
+  assert.equal(canVoteFor(poster("a", 1), me), true);
+  assert.equal(canVoteFor(poster("me", 1), me), false);
+  assert.equal(canVoteFor(poster("a", 1, { authors: [{ name: "zoe martin" }] }), me), false);
+  assert.equal(canVoteFor(talk("t"), me), false);
   assert.equal(canVoteFor(poster("a", 1), null), false);
+  assert.equal(canVoteFor(poster("a", 1), { uid: null, name: "Zoé Martin" }), false);
+});
+
+test("nameKey ignores case, accents, hyphens and spacing but not initials", () => {
+  assert.equal(nameKey("  Jean-Pierre   Dupré "), "jean pierre dupre");
+  assert.equal(nameKey("JEAN PIERRE DUPRE"), "jean pierre dupre");
+  assert.notEqual(nameKey("J. Dupré"), nameKey("Jean Dupré"));
+  assert.equal(nameKey(undefined), "");
+});
+
+test("isPosterAuthor: submitter by uid, co-author by name, nobody on an empty name", () => {
+  const p = poster("sub", 1, { authors: [{ name: "Sub" }, { name: "Zoé Martin" }] });
+  assert.equal(isPosterAuthor(p, { uid: "sub", name: "Someone Else" }), true);
+  assert.equal(isPosterAuthor(p, me), true);
+  assert.equal(isPosterAuthor(p, { uid: "x", name: "Other Person" }), false);
+  assert.equal(isPosterAuthor(poster("a", 1, { authors: [{ name: "" }] }), { uid: "x", name: "" }),
+    false);
+  assert.equal(isPosterAuthor(undefined, me), false);
 });
 
 test("posterLabel names a poster, or says it is gone", () => {
@@ -92,4 +120,13 @@ test("ballotRows joins voter and poster, ordered by poster then voter", () => {
     ["P1", "Bob"], ["P2", "Amy"], ["P2", "Zed"], ["", "(no profile)"],
   ]);
   assert.equal(rows[3].posterTitle, "(no longer listed)");
+});
+
+test("ballotRows flags a ballot for a poster the voter is an author of", () => {
+  const rows = ballotRows(
+    [{ id: "u1", posterId: "a" }, { id: "u2", posterId: "a" }],
+    [{ id: "u1", displayName: "Zoé Martin" }, { id: "u2", displayName: "Amy" }],
+    [poster("a", 1, { authors: [{ name: "a" }, { name: "Zoe Martin" }] })]);
+  assert.deepEqual(rows.map((r) => [r.voterName, r.ownPoster]),
+    [["Amy", false], ["Zoé Martin", true]]);
 });

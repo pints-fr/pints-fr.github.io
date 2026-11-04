@@ -2,7 +2,9 @@ import {
   clearAllVotes, deleteVote, getSiteConfig, listPublicAbstracts, listUsers, listVotes, saveSiteConfig,
 } from "./db.js";
 import { summaryAuthorLine } from "./abstract-utils.mjs";
-import { ballotRows, posterLabel, tallyVotes, votingOpen, votingStats } from "./vote-utils.mjs";
+import {
+  ballotRows, isPosterAuthor, posterLabel, tallyVotes, votingOpen, votingStats,
+} from "./vote-utils.mjs";
 import { confirmChoice } from "./confirm-dialog.js";
 import { toCsv } from "./csv-utils.mjs";
 import { download } from "./download.js";
@@ -15,6 +17,7 @@ const BALLOT_COLUMNS = [
   { key: "voterAffiliation", label: "Voter affiliation" },
   { key: "voterEmail", label: "Voter email" },
   { key: "votedAtText", label: "Voted at" },
+  { key: "ownPosterText", label: "Voter is an author" },
 ];
 
 const percent = (x) => `${Math.round(x * 100)}%`;
@@ -38,7 +41,8 @@ export async function mountVotingTab(host) {
         <input id="v-open" type="checkbox">
         <label for="v-open">Best-poster voting is open
           <span class="hint">Registered participants with a confirmed email can vote once for an
-            accepted poster that is not their own, and change their vote while this is ticked.
+            accepted poster they are not an author of (matched by their registered
+            name), and change their vote while this is ticked.
             Untick to freeze the ballots. Enforced by the security rules.</span>
         </label>
       </div>
@@ -104,6 +108,11 @@ export async function mountVotingTab(host) {
     const userById = new Map(users.map((u) => [u.id, u]));
     const posterById = new Map(published.map((p) => [p.id, p]));
     const voterName = (uid) => userById.get(uid)?.displayName ?? "(no profile)";
+    // Ballots for a poster the voter is named on. The rules refuse new ones,
+    // but not a name spelled differently, nor ballots cast before the check.
+    const ownVote = (vote) => isPosterAuthor(posterById.get(vote.posterId),
+      { uid: vote.id, name: userById.get(vote.id)?.displayName });
+    const ownCount = votes.filter(ownVote).length;
 
     host.querySelector("#v-stats").replaceChildren(
       stat(stats.cast, "votes cast"),
@@ -111,6 +120,7 @@ export async function mountVotingTab(host) {
       stat(percent(stats.turnout), "turnout"),
       stat(`${stats.postersWithVotes} / ${stats.candidates}`, "posters with a vote"),
       ...(stats.orphaned ? [stat(stats.orphaned, "for posters no longer listed")] : []),
+      ...(ownCount ? [stat(ownCount, "by an author of that poster")] : []),
     );
 
     const top = tally.rows[0];
@@ -165,14 +175,25 @@ export async function mountVotingTab(host) {
     }));
 
     ballots = ballotRows(votes, users, published)
-      .map((r) => ({ ...r, votedAtText: r.votedAt ? r.votedAt.toISOString() : "" }));
+      .map((r) => ({
+        ...r,
+        votedAtText: r.votedAt ? r.votedAt.toISOString() : "",
+        ownPosterText: r.ownPoster ? "yes" : "",
+      }));
     const byVoter = votes.toSorted((a, b) => voterName(a.id).localeCompare(voterName(b.id)));
     host.querySelector("#v-ballots").replaceChildren(...byVoter.map((vote) => {
       const tr = document.createElement("tr");
+      const votedFor = cell(posterLabel(posterById.get(vote.posterId)));
+      if (ownVote(vote)) {
+        const flag = document.createElement("div");
+        flag.className = "vote-own-flag";
+        flag.textContent = "⚠ The voter is named as an author of this poster";
+        votedFor.append(flag);
+      }
       tr.append(
         cell(voterName(vote.id)),
         cell(userById.get(vote.id)?.affiliation ?? ""),
-        cell(posterLabel(posterById.get(vote.posterId))),
+        votedFor,
         cell(when(vote.updatedAt)),
         deleteCell(vote.id, voterName(vote.id), posterLabel(posterById.get(vote.posterId))),
       );

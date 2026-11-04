@@ -12,18 +12,45 @@ import { posterCode, sortPublicAbstracts, summaryAuthorLine } from "./abstract-u
 export const votingOpen = (config) => config?.votingOpen === true;
 
 /**
- * The posters `voterUid` may vote for: accepted posters only (talks excluded),
- * never their own. An abstract's id is its submitter's uid, which is the whole
- * of the "own poster" test. Board order, as on the abstracts page.
+ * A person's name reduced for comparison: case, accents, hyphens and runs of
+ * spaces do not count, so "Jean-Pierre  Dupré" and "jean pierre dupre" match.
+ * Initials and nicknames are not attempted: "J. Dupré" stays different.
  */
-export function eligiblePosters(publicAbstracts, voterUid) {
-  return sortPublicAbstracts((publicAbstracts ?? [])
-    .filter((a) => a?.type === "poster" && a.id !== voterUid));
+export function nameKey(name) {
+  return String(name ?? "")
+    .normalize("NFD").replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[\s-]+/g, " ")
+    .trim();
 }
 
-/** Whether this one abstract would take a vote from `voterUid`. */
-export const canVoteFor = (abstract, voterUid) =>
-  abstract?.type === "poster" && Boolean(voterUid) && abstract.id !== voterUid;
+/**
+ * Whether the voter is one of the poster's authors: the submitter by uid (an
+ * abstract's id is its submitter's uid), a co-author by name, since co-authors
+ * are names on the abstract rather than accounts. firestore.rules
+ * isPosterAuthor() is the backstop for the same test, minus the accent
+ * folding, which the rules language cannot do, so this one is the stricter.
+ */
+export function isPosterAuthor(abstract, voter) {
+  if (!abstract) return false;
+  if (voter?.uid && abstract.id === voter.uid) return true;
+  const key = nameKey(voter?.name);
+  return Boolean(key) && (abstract.authors ?? []).some((a) => nameKey(a?.name) === key);
+}
+
+/**
+ * The posters `voter` ({ uid, name }) may vote for: accepted posters only
+ * (talks excluded), never one they are an author of. Board order, as on the
+ * abstracts page.
+ */
+export function eligiblePosters(publicAbstracts, voter) {
+  return sortPublicAbstracts((publicAbstracts ?? [])
+    .filter((a) => canVoteFor(a, voter)));
+}
+
+/** Whether this one abstract would take a vote from `voter` ({ uid, name }). */
+export const canVoteFor = (abstract, voter) =>
+  abstract?.type === "poster" && Boolean(voter?.uid) && !isPosterAuthor(abstract, voter);
 
 /** "P1-12 · Title", for one-line mentions of a poster. */
 export function posterLabel(poster) {
@@ -111,6 +138,7 @@ export function ballotRows(votes, users, posters) {
       posterTitle: poster?.title ?? "(no longer listed)",
       presenter: poster ? summaryAuthorLine(poster.authors) : "",
       votedAt: vote.updatedAt ?? null,
+      ownPoster: isPosterAuthor(poster, { uid: vote.id, name: voter?.displayName }),
     };
   }).sort((a, b) =>
     a.order - b.order || String(a.voterName).localeCompare(String(b.voterName)))

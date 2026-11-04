@@ -19,13 +19,16 @@ export async function loadBallot(user) {
     console.error("[pints] getSiteConfig", err);
     return null;
   });
-  const ballot = { uid: user?.uid ?? null, open: votingOpen(config), vote: null, reason: null };
+  const ballot = {
+    uid: user?.uid ?? null, voter: null, open: votingOpen(config), vote: null, reason: null,
+  };
   if (!ballot.open) return { ...ballot, reason: "closed" };
   if (!user) return { ...ballot, reason: "signedOut" };
   if (!await refreshVerification(user)) return { ...ballot, reason: "unverified" };
   const [profile, vote] = await Promise.all([getProfile(user.uid), getMyVote(user.uid)]);
   if (!profile) return { ...ballot, reason: "unregistered" };
-  return { ...ballot, vote };
+  // The registered name is what co-authorship is matched on (canVoteFor).
+  return { ...ballot, vote, voter: { uid: user.uid, name: profile.displayName } };
 }
 
 /** One sentence on why `reason` stops a vote. */
@@ -67,13 +70,14 @@ export async function withdrawVote(ballot) {
 /**
  * The control inside one abstract on abstracts.html: a vote button, or a
  * "your vote" marker with a withdraw link. null when this abstract takes no
- * vote from this visitor (a talk, their own poster, voting closed).
+ * vote from this visitor (a talk, a poster they are an author of, voting
+ * closed).
  *
  * `onChange` runs after a successful write so the page can redraw every row —
  * moving a vote changes two of them.
  */
 export function voteControl(abstract, ballot, { onChange, onError }) {
-  if (!ballot?.open || ballot.reason || !canVoteFor(abstract, ballot.uid)) return null;
+  if (!ballot?.open || ballot.reason || !canVoteFor(abstract, ballot.voter)) return null;
   const box = document.createElement("p");
   box.className = "vote-control";
 

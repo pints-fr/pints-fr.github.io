@@ -519,10 +519,12 @@ service cloud.firestore {
     // one abstract per participant: the document id IS the voter's uid, so a
     // second vote has nowhere to go and changing your mind is an overwrite.
     //
-    // "Not your own poster" is a plain inequality because an abstract's id —
-    // and its public copy's — is its submitter's uid. That covers the
-    // submitter only: co-authors are names on the abstract, not accounts, so
-    // there is nothing here to compare them against.
+    // "Not your own poster" is two tests. The submitter is a plain inequality,
+    // because an abstract's id — and its public copy's — is its submitter's
+    // uid. Co-authors are names on the abstract, not accounts, so they are
+    // matched by the voter's registered name (posterAuthorNamed() below). That
+    // is a backstop, not a proof: a name spelled differently gets through,
+    // and the admin Voting tab flags such ballots for the organizers.
     //
     // Registered means a confirmed address AND a users/ profile, the same pair
     // that puts somebody on the participant list; a bare Auth account made
@@ -534,6 +536,33 @@ service cloud.firestore {
     //
     // `list` is organizers only: who voted for whom is theirs to see, and a
     // voter reads their own ballot with a direct get.
+    // A name reduced for comparison: case, hyphens and runs of spaces do not
+    // count. js/vote-utils.mjs nameKey() also folds accents, which the rules
+    // language cannot, so the page refuses a little more than this does.
+    function nameKey(name) {
+      return name.lower().replace('[\\s-]+', ' ').trim();
+    }
+
+    function authorAt(authors, i, key) {
+      return authors.size() > i && authors[i] is map
+        && authors[i].get('name', '') is string
+        && nameKey(authors[i].get('name', '')) == key;
+    }
+
+    // Whether any of a poster's authors is called `name`. Unrolled because
+    // rules have no loops; validAbstract() caps a list at 20 authors.
+    function posterAuthorNamed(authors, name) {
+      let key = nameKey(name);
+      return key != '' && (
+        authorAt(authors, 0, key) || authorAt(authors, 1, key) || authorAt(authors, 2, key)
+        || authorAt(authors, 3, key) || authorAt(authors, 4, key) || authorAt(authors, 5, key)
+        || authorAt(authors, 6, key) || authorAt(authors, 7, key) || authorAt(authors, 8, key)
+        || authorAt(authors, 9, key) || authorAt(authors, 10, key) || authorAt(authors, 11, key)
+        || authorAt(authors, 12, key) || authorAt(authors, 13, key) || authorAt(authors, 14, key)
+        || authorAt(authors, 15, key) || authorAt(authors, 16, key) || authorAt(authors, 17, key)
+        || authorAt(authors, 18, key) || authorAt(authors, 19, key));
+    }
+
     match /poster_votes/{uid} {
       allow get: if isOwner(uid) || isAdmin();
       allow list: if isAdmin();
@@ -549,7 +578,11 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/abstracts_public/$(request.resource.data.posterId))
              .data.type == 'poster'
         && get(/databases/$(database)/documents/abstracts_public/$(request.resource.data.posterId))
-             .data.edition == request.resource.data.edition;
+             .data.edition == request.resource.data.edition
+        && !posterAuthorNamed(
+             get(/databases/$(database)/documents/abstracts_public/$(request.resource.data.posterId))
+               .data.get('authors', []),
+             get(/databases/$(database)/documents/users/$(uid)).data.displayName);
       // Withdrawing is allowed while the vote is open; after it closes the
       // ballot is frozen for everybody but the organizers.
       allow delete: if isOwner(uid) && votingOpen();
