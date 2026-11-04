@@ -520,6 +520,9 @@ export const castVote = (uid, posterId) =>
 
 export const clearMyVote = (uid) => deleteDoc(doc(db, "poster_votes", uid));
 
+/** Delete one participant's ballot. Admin-only, per the rules, open or closed. */
+export const deleteVote = (voterUid) => deleteDoc(doc(db, "poster_votes", voterUid));
+
 /** Every ballot this edition. Admin-only, per the rules. */
 export async function listVotes() {
   const q = query(collection(db, "poster_votes"), where("edition", "==", CURRENT_EDITION));

@@ -1,5 +1,5 @@
 import {
-  clearAllVotes, getSiteConfig, listPublicAbstracts, listUsers, listVotes, saveSiteConfig,
+  clearAllVotes, deleteVote, getSiteConfig, listPublicAbstracts, listUsers, listVotes, saveSiteConfig,
 } from "./db.js";
 import { summaryAuthorLine } from "./abstract-utils.mjs";
 import { ballotRows, posterLabel, tallyVotes, votingOpen, votingStats } from "./vote-utils.mjs";
@@ -63,7 +63,7 @@ export async function mountVotingTab(host) {
     <h2>Every ballot</h2>
     <div class="table-scroll">
       <table>
-        <thead><tr><th>Voter</th><th>Affiliation</th><th>Voted for</th><th>When</th></tr></thead>
+        <thead><tr><th>Voter</th><th>Affiliation</th><th>Voted for</th><th>When</th><th></th></tr></thead>
         <tbody id="v-ballots"></tbody>
       </table>
     </div>`;
@@ -174,11 +174,47 @@ export async function mountVotingTab(host) {
         cell(userById.get(vote.id)?.affiliation ?? ""),
         cell(posterLabel(posterById.get(vote.posterId))),
         cell(when(vote.updatedAt)),
+        deleteCell(vote.id, voterName(vote.id), posterLabel(posterById.get(vote.posterId))),
       );
       return tr;
     }));
 
     if (!tally.rows.length) say("There are no accepted posters yet.", "warn");
+  }
+
+  // One ballot at a time, e.g. a test vote or a participant who asks for theirs
+  // to be withdrawn after voting closed. The rules let organizers delete any
+  // ballot whether voting is open or not.
+  function deleteCell(voterUid, name, poster) {
+    const td = document.createElement("td");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "danger";
+    button.textContent = "Delete";
+    button.addEventListener("click", async () => {
+      const choice = await confirmChoice({
+        title: "Delete vote",
+        message: `This permanently deletes ${name}'s vote for ${poster}. `
+          + "If voting is still open, they can vote again.",
+        choices: [
+          { value: "delete", label: "Delete vote", className: "danger" },
+          { value: "cancel", label: "Cancel", className: "secondary" },
+        ],
+      });
+      if (choice !== "delete") return;
+      button.disabled = true;
+      try {
+        await deleteVote(voterUid);
+        await render();
+        say(`Deleted ${name}'s vote.`, "warn");
+      } catch (err) {
+        button.disabled = false;
+        say("Could not delete the vote.", "err");
+        console.error("[pints] deleteVote", err);
+      }
+    });
+    td.append(button);
+    return td;
   }
 
   host.querySelector("#v-refresh").addEventListener("click", async (e) => {
