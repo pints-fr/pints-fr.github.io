@@ -197,7 +197,7 @@ service cloud.firestore {
     function validScheduleItem(data) {
       return data.keys().hasOnly(['edition', 'start', 'end', 'title', 'speaker',
                                   'affiliation', 'kind', 'session', 'abstractId',
-                                  'posterSession'])
+                                  'posterSession', 'abstract'])
         && data.keys().hasAll(['edition', 'title', 'kind'])
         && data.edition is string
         && str(data.title, 200)
@@ -208,7 +208,10 @@ service cloud.firestore {
         && (!('session' in data)
             || data.session in ['cognitive', 'systems', 'computational', 'keynote'])
         // Which poster session a poster slot is: POSTER_SESSIONS in js/config.mjs.
-        && (!('posterSession' in data) || data.posterSession in [1, 2]);
+        && (!('posterSession' in data) || data.posterSession in [1, 2])
+        // An invited speaker's abstract, typed in by the organizers because
+        // there is no submitted abstract to link. Markdown, sanitized on render.
+        && optStr(data, 'abstract', 5000);
     }
 
     // The home page hero photographs, config/hero. Checked even though the write

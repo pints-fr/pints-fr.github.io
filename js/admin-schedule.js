@@ -174,6 +174,24 @@ export async function mountScheduleTab(host) {
     }
   });
 
+  // An invited speaker submits nothing, so there is no abstract to link; the
+  // organizers paste theirs here instead. Offered for keynotes and talks only.
+  const textLabel = document.createElement("label");
+  textLabel.setAttribute("for", "s-abstract-text");
+  textLabel.textContent = "Talk abstract (Markdown, optional)";
+  const textInput = document.createElement("textarea");
+  textInput.id = "s-abstract-text";
+  textInput.maxLength = 5000;
+  textInput.rows = 6;
+  textInput.placeholder = "For invited speakers. Shown under the title in the program.";
+  const textField = document.createElement("div");
+  textField.append(textLabel, textInput);
+  form.append(textField);
+  const syncAbstractText = () => {
+    textField.hidden = !["keynote", "talk"].includes(kindSelect.value);
+  };
+  kindSelect.addEventListener("change", syncAbstractText);
+
   const actions = document.createElement("div");
   actions.className = "actions";
   const save = document.createElement("button");
@@ -197,6 +215,8 @@ export async function mountScheduleTab(host) {
     posterSessionSelect.value = "";
     syncPosterSession();
     abstractSelect.value = "";
+    textInput.value = "";
+    syncAbstractText();
     heading.textContent = "Add an item";
     save.textContent = "Add item";
     cancel.hidden = true;
@@ -213,6 +233,8 @@ export async function mountScheduleTab(host) {
     // A link to an abstract since un-accepted shows as none rather than as a
     // blank select; saving then drops it, which is what it should be.
     abstractSelect.value = abstractsById.has(item.abstractId) ? item.abstractId : "";
+    textInput.value = item.abstract ?? "";
+    syncAbstractText();
     heading.textContent = `Editing: ${item.title}`;
     save.textContent = "Save changes";
     cancel.hidden = false;
@@ -237,6 +259,12 @@ export async function mountScheduleTab(host) {
       link.rel = "noopener";
       link.textContent = "abstract ↗";
       what.append(" — ", link);
+    }
+    if (item.abstract) {
+      const tag = document.createElement("span");
+      tag.className = "pill";
+      tag.textContent = "abstract";
+      what.append(" ", tag);
     }
     const posterSession = posterSessions.get(item.id);
     if (posterSession) {
@@ -351,6 +379,8 @@ export async function mountScheduleTab(host) {
     // stored "" would have to be special-cased by every reader.
     if (sessionSelect.value) data.session = sessionSelect.value;
     if (abstractSelect.value) data.abstractId = abstractSelect.value;
+    const abstractText = textInput.value.trim();
+    if (abstractText && ["keynote", "talk"].includes(data.kind)) data.abstract = abstractText;
     if (data.kind === "poster" && posterSessionSelect.value) {
       data.posterSession = Number(posterSessionSelect.value);
     }

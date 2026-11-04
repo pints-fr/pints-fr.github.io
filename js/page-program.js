@@ -4,6 +4,7 @@ import { onUser } from "./auth.js";
 import { getSiteConfig, listPublicAbstracts, listSchedule } from "./db.js";
 import { abstractListLink, posterSessionLink } from "./abstract-utils.mjs";
 import { POSTER_SESSION_LABELS } from "./config.mjs";
+import { renderAbstractHtml } from "./markdown.js";
 import {
   formatDayHeading,
   formatTimeRange,
@@ -62,6 +63,21 @@ function itemRow(item, { links, posterSessions }) {
     link.href = "party.html";
     link.textContent = "details";
     what.append(" — ", link);
+  }
+
+  // An invited talk's abstract, folded so the program still scans as a grid.
+  // Organizer-entered Markdown, sanitized with the same allowlist as a
+  // submitted abstract.
+  if (item.abstract && (item.kind === "keynote" || item.kind === "talk")) {
+    const details = document.createElement("details");
+    details.className = "talk-abstract";
+    const summary = document.createElement("summary");
+    summary.textContent = "Abstract";
+    const body = document.createElement("div");
+    body.className = "abstract-text";
+    body.innerHTML = renderAbstractHtml(item.abstract);
+    details.append(summary, body);
+    what.append(details);
   }
 
   const who = document.createElement("td");

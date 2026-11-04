@@ -108,3 +108,14 @@ test("a poster slot can name its poster session, from the vocabulary only", asyn
       item({ kind: "poster", posterSession })));
   }
 });
+
+test("an invited talk can carry an abstract of up to 5000 characters", async () => {
+  await seedAdmin(env, "boss");
+  const fs = asUser(env, "boss");
+  await assertSucceeds(setDoc(doc(fs, "schedule", "s1"),
+    item({ abstract: "How the brain *learns*." })));
+  await assertSucceeds(setDoc(doc(fs, "schedule", "s1"), item({ abstract: "x".repeat(5000) })));
+  for (const abstract of ["x".repeat(5001), 42, null]) {
+    await assertFails(setDoc(doc(fs, "schedule", "s1"), item({ abstract })));
+  }
+});
