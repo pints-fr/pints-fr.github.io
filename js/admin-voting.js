@@ -63,6 +63,7 @@ export async function mountVotingTab(host) {
         <tbody id="v-rank"></tbody>
       </table>
     </div>
+    <p id="v-unvoted" class="muted"></p>
 
     <h2>Every ballot</h2>
     <div class="table-scroll">
@@ -128,7 +129,14 @@ export async function mountVotingTab(host) {
       say(`Tie for first place at ${top.count} ${top.count === 1 ? "vote" : "votes"}.`, "warn");
     }
 
-    host.querySelector("#v-rank").replaceChildren(...tally.rows.map((row) => {
+    // Posters without a vote are left out of the table, which would otherwise
+    // be mostly zeros; the line under it says how many there are.
+    const voted = tally.rows.filter((row) => row.count > 0);
+    const unvoted = tally.rows.length - voted.length;
+    host.querySelector("#v-unvoted").textContent = unvoted
+      ? `${unvoted} ${unvoted === 1 ? "poster has" : "posters have"} no votes and ${unvoted === 1 ? "is" : "are"} not listed.`
+      : "";
+    host.querySelector("#v-rank").replaceChildren(...voted.map((row) => {
       const tr = document.createElement("tr");
       const rank = cell(row.count ? `${row.rank}${row.tied ? "=" : ""}` : "–");
       rank.className = "num";
