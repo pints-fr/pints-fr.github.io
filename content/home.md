@@ -29,7 +29,7 @@ Registration is free but required, so we can plan catering and poster boards.
 
 ## Sponsors
 
-We thank [majab.com](https://www.majab.com/) for designing our logo, and [Institut de la Vision](https://www.institut-vision.org/?gad_source=1&gad_campaignid=23532190238&gbraid=0AAAAA-XeQ52Ug4krC6bS88HSlP0qzvdUe), 
+We thank [majab.com](https://www.majab.com/) for designing our logo, and [IHU FOReSIGHT](https://www.15-20.fr/recherche-et-enseignement/ihu-foresight/), 
 [DIM C-Brains](https://dim-cbrains.fr/fr/home) and [Aquineuro](https://aquineuro.eu/) for their generous support.
 
-![Institut de la Vision, AquiNeuro, and DIM C-Brains](assets/sponsors/sponsors-2026.png)
+![IHU FOReSIGHT, AquiNeuro, and DIM C-Brains](assets/sponsors/sponsors-2026.png)
